@@ -347,11 +347,16 @@ fn render_db_scale(sb : StringBuilder, row : Int32, max_height : Int32) -> Unit 
   )
   let expected_row = label_row * max_height / (db_labels.length() - 1)
   if row == expected_row {
-    sb.write_string("\u001b[90m")
+    // Warm-to-cool gradient: 0dB=warm white, -48dB=cool blue
+    let hue = 200.0 *
+      label_row.to_double() /
+      (db_labels.length() - 1).to_double()
+    let (r, g, b) = hsl_to_rgb(hue, 0.3, 0.6)
+    sb.write_string("\u001b[38;2;\{r};\{g};\{b}m")
     sb.write_string(db_labels[label_row])
     sb.write_string("\u001b[0m ")
   } else {
-    sb.write_string("\u001b[90m│\u001b[0m ")
+    sb.write_string("\u001b[38;2;70;70;90m│\u001b[0m ")
   }
 }
 
@@ -382,7 +387,7 @@ fn render_waveform(
     let abs_amp = sample.abs().clamp(min=0.0, max=1.0)
     let amp_int = (abs_amp * 255.0).to_int()
     match scaled {
-      0 => sb.write_string("\u001b[90m─\u001b[0m")
+      0 => sb.write_string("\u001b[38;2;60;70;90m─\u001b[0m")
       1 => {
         let g = 180 + amp_int / 4
         sb.write_string("\u001b[38;2;80;\{g};200m▔\u001b[0m")
@@ -415,7 +420,7 @@ fn render_waveform(
           let b = 220 + amp_int / 6
           sb.write_string("\u001b[38;2;120;150;\{b}m█\u001b[0m")
         }
-      _ => sb.write_string("\u001b[90m─\u001b[0m")
+      _ => sb.write_string("\u001b[38;2;60;70;90m─\u001b[0m")
     }
   }
   sb.write_string("\n")
@@ -553,13 +558,13 @@ fn render_spectrum(
   }
   sb.write_string("╝\n\u001b[0m")
 
-  // --- Separator ---
-  sb.write_string("\u001b[90m")
-  for _ in 0..<6 {
-    sb.write_string("─")
-  }
-  for _ in 0..<num_bars {
-    sb.write_string("─")
+  // --- Separator with true-color gradient + beat pulse ---
+  let sep_light = 0.3 + beat_intensity * 0.15
+  for i in 0..<(num_bars + 6) {
+    let ratio = i.to_double() / (num_bars + 5).to_double()
+    let hue = 260.0 * (1.0 - ratio)
+    let (r, g, b) = hsl_to_rgb(hue, 0.6, sep_light)
+    sb.write_string("\u001b[38;2;\{r};\{g};\{b}m─")
   }
   sb.write_string("\u001b[0m\n")
 
@@ -569,7 +574,8 @@ fn render_spectrum(
     if bar == dominant_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
     } else if ctx.is_grid[bar] {
-      sb.write_string("\u001b[90m╎\u001b[0m")
+      sb.write_string(ctx.color_table[bar][3])
+      sb.write_string("╎\u001b[0m")
     } else {
       sb.write_string(" ")
     }
@@ -625,9 +631,11 @@ fn render_spectrum(
         }
         Empty =>
           if ctx.is_grid[bar] {
-            sb.write_string("\u001b[90m╎\u001b[0m")
+            sb.write_string(ctx.color_table[bar][3])
+            sb.write_string("╎\u001b[0m")
           } else if ref_line {
-            sb.write_string("\u001b[90m┄\u001b[0m")
+            sb.write_string(ctx.color_table[bar][2])
+            sb.write_string("┄\u001b[0m")
           } else {
             sb.write_string(" ")
           }
@@ -637,23 +645,26 @@ fn render_spectrum(
     sb.write_string("\n")
   }
 
-  // --- Bottom glow reflection with proper bar colors ---
-  for glow_row in 0..<3 {
+  // --- Bottom glow reflection with proper bar colors (5 rows) ---
+  for glow_row in 0..<5 {
     sb.write_string("\u001b[90m     \u001b[0m")
     let glow_factor = match glow_row {
       0 => 0.4
-      1 => 0.25
-      _ => 0.12
+      1 => 0.3
+      2 => 0.2
+      3 => 0.12
+      _ => 0.06
     }
     for bar in 0..<num_bars {
       let reflected_height = (heights[bar].to_double() * glow_factor).to_int()
       let glow_level = (glow_row + 1) * sub_res
       if reflected_height >= glow_level {
-        // Use proper color level based on glow row (dimmer further down)
         let color_level = match glow_row {
-          0 => 10
-          1 => 6
-          _ => 3
+          0 => 12
+          1 => 9
+          2 => 6
+          3 => 4
+          _ => 2
         }
         sb.write_string(ctx.color_table[bar][color_level])
         sb.write_string("▀")
