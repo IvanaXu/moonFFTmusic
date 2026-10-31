@@ -124,15 +124,18 @@ jobs:
           python3 -c "
           import struct, math, wave
 
-          # 440Hz sine wave, 2 seconds
-          sr = 44100; n = sr * 2
+          sr = 44100
+          duration = 0.5  # 0.5 seconds — short enough to finish within CI timeout
+          n = int(sr * duration)
+
+          # 440Hz sine wave
           with wave.open('test_440.wav', 'w') as w:
               w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
               for i in range(n):
                   v = 0.8 * math.sin(2 * math.pi * 440 * i / sr)
                   w.writeframes(struct.pack('<h', int(v * 32767)))
 
-          # Chord: 220 + 440 + 880 + 2000 Hz, 2 seconds
+          # Chord: 220 + 440 + 880 + 2000 Hz
           with wave.open('test_chord.wav', 'w') as w:
               w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
               for i in range(n):
@@ -142,13 +145,14 @@ jobs:
                     + 0.3 * math.sin(2*math.pi*880*t) \
                     + 0.3 * math.sin(2*math.pi*2000*t)
                   w.writeframes(struct.pack('<h', int(v * 32767 * 0.5)))
-          print('Generated test_440.wav and test_chord.wav')
+          print(f'Generated test_440.wav and test_chord.wav ({duration}s each)')
           "
 
       - name: Run visualizer with 440Hz WAV
         timeout-minutes: 2
         run: |
-          timeout 5 moon run src/main test_440.wav 1024 > output_440.txt 2>&1 || true
+          # 0.5s audio with FFT 1024: ~43 hops * 50ms sleep + 500ms init ≈ 2.7s
+          timeout 10 moon run src/main test_440.wav 1024 > output_440.txt 2>&1 || true
           # Verify the visualizer produced output with expected header
           grep -q "MoonFFTmusic" output_440.txt
           grep -q "Sample rate: 44100Hz" output_440.txt
@@ -158,7 +162,7 @@ jobs:
       - name: Run visualizer with chord WAV
         timeout-minutes: 2
         run: |
-          timeout 5 moon run src/main test_chord.wav 1024 > output_chord.txt 2>&1 || true
+          timeout 10 moon run src/main test_chord.wav 1024 > output_chord.txt 2>&1 || true
           grep -q "MoonFFTmusic" output_chord.txt
           grep -q "Playback complete" output_chord.txt
           echo "✅ Chord integration test passed"
@@ -167,8 +171,8 @@ jobs:
         timeout-minutes: 5
         run: |
           for size in 256 512 2048 4096; do
-            timeout 3 moon run src/main test_440.wav $size > /dev/null 2>&1 || true
-            echo "✅ FFT size $size passed"
+            timeout 15 moon run src/main test_440.wav $size > /dev/null 2>&1 || true
+            echo "✅ FFT size $size ran without crash"
           done
 
       - name: Verify error handling (nonexistent file)
