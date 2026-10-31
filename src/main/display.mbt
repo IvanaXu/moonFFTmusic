@@ -2,15 +2,20 @@
 // Terminal Display Module — Beautiful ANSI spectrum visualizer
 // Visual enhancements:
 //   1. Attack/release envelope — fast rise, slow fall (natural decay)
-//   2. Row-level brightness gradient — 3D glow effect per bar
-//   3. Left-side dB scale — professional meter look
-//   4. Segmented RMS meter — green/yellow/red zones
-//   5. Peak markers with gravity decay + bold ━
-//   6. Separator line between header and spectrum
-//   7. Musical note detection for dominant frequency
-//   8. Bar grouping with subtle gaps every 3 bars
-//   9. Bottom glow reflection — dim mirror of spectrum
-//  10. Dashed reference line at -12dB
+//   2. Spatial smoothing — 3-tap blur across neighboring bars
+//   3. Row-level brightness gradient — 3D glow effect per bar
+//   4. Left-side dB scale — professional meter look
+//   5. Segmented RMS meter — green/yellow/red zones
+//   6. Peak markers with exponential decay + bold ━
+//   7. Separator line between header and spectrum
+//   8. Musical note detection for dominant frequency
+//   9. Bar grouping with subtle gaps every 3 bars
+//  10. Bottom glow reflection — dim mirror of spectrum
+//  11. Dashed reference line at -12dB
+//  12. Bar caps — ▀ at top of each bar for "sealed" look
+//  13. Peak frequency marker — ▼ arrow above dominant bar
+//  14. Vertical frequency grid — faint ╎ at label positions
+//  15. Magnitude-based color intensity — taller bars glow brighter
 // =============================================================================
 
 ///|
@@ -38,6 +43,7 @@ let note_names : Array[String] = [
 ///|
 enum BarState {
   FullBlock
+  BarCap // topmost cell of a bar: draw ▀
   PartialBlock(Int32)
   PeakMarker
   Empty
@@ -84,19 +90,23 @@ fn bright_color_code(color : Int32) -> Int32 {
 }
 
 ///|
-fn gradient_color_row(
+// Color based on bar position + row height + magnitude intensity
+fn gradient_color_full(
   bar : Int32,
   num_bars : Int32,
   row : Int32,
   max_height : Int32,
+  height_ratio : Double,
 ) -> String {
   let idx = palette_index(bar, num_bars)
   let base_color = rainbow_palette[idx]
   let row_ratio = row.to_double() / max_height.to_double()
-  let color = match row_ratio {
-    r if r < 0.3 => bright_color_code(base_color)
-    r if r < 0.7 => base_color
-    _ => dim_color_code(base_color)
+  // Combine row position and magnitude for brightness
+  let brightness_score = row_ratio * 0.5 + height_ratio * 0.5
+  let color = match brightness_score {
+    s if s < 0.25 => dim_color_code(base_color)
+    s if s < 0.6 => base_color
+    _ => bright_color_code(base_color)
   }
   "\u001b[38;5;\{color}m"
 }
@@ -180,6 +190,7 @@ fn scale_magnitude(mag : Double) -> Double {
 }
 
 ///|
+// Bar state with cap detection: is this the topmost row of the bar?
 fn bar_state(
   height : Int32,
   peak : Int32,
@@ -187,7 +198,12 @@ fn bar_state(
   level_bottom : Int32,
 ) -> BarState {
   if height >= level_top {
-    FullBlock
+    // Check if this is the topmost full cell
+    if height < level_top + 8 {
+      BarCap
+    } else {
+      FullBlock
+    }
   } else if height > level_bottom {
     let frac = height - level_bottom
     PartialBlock(frac.clamp(min=0, max=8))
@@ -289,7 +305,23 @@ fn render_spectrum(
     prev_heights[bar] = heights[bar]
   }
 
-  // --- Update peak hold with gravity decay ---
+  // --- Spatial smoothing: 3-tap blur [0.2, 0.6, 0.2] ---
+  let smoothed_heights : Array[Int32] = Array::make(num_bars, 0)
+  for bar in 0..<num_bars {
+    let left = if bar > 0 { heights[bar - 1].to_double() } else { 0.0 }
+    let center = heights[bar].to_double()
+    let right = if bar < num_bars - 1 {
+      heights[bar + 1].to_double()
+    } else {
+      0.0
+    }
+    smoothed_heights[bar] = (left * 0.2 + center * 0.6 + right * 0.2).to_int()
+  }
+  for bar in 0..<num_bars {
+    heights[bar] = smoothed_heights[bar]
+  }
+
+  // --- Update peak hold with exponential decay ---
   for bar in 0..<num_bars {
     match (heights[bar] >= peak_heights[bar], peak_frames[bar] > 3) {
       (true, _) => {
@@ -297,9 +329,9 @@ fn render_spectrum(
         peak_frames[bar] = 0
       }
       (false, true) => {
-        if peak_heights[bar] > 0 {
-          peak_heights[bar] = peak_heights[bar] - sub_res / 2
-        }
+        // Exponential decay: multiply by 0.88 each frame
+        let decayed = (peak_heights[bar].to_double() * 0.88).to_int()
+        peak_heights[bar] = decayed
         peak_frames[bar] = 0
       }
       (false, false) => peak_frames[bar] = peak_frames[bar] + 1
@@ -309,6 +341,19 @@ fn render_spectrum(
   // --- Dominant frequency + note name ---
   let dominant_freq = dominant_bin * sample_rate / fft_size
   let note_name = freq_to_note(dominant_freq)
+  // Find which bar the dominant frequency maps to
+  let dominant_bar = freq_to_bar(
+    dominant_freq.to_double(),
+    num_bars,
+    half_fft,
+    sample_rate,
+  )
+
+  // --- Precompute frequency grid positions ---
+  let freq_labels : Array[Int32] = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+  let grid_bars : Array[Int32] = Array::makei(freq_labels.length(), fn(j) {
+    freq_to_bar(freq_labels[j].to_double(), num_bars, half_fft, sample_rate)
+  })
 
   // --- Box-drawing header ---
   let header_width = num_bars + 6
@@ -353,7 +398,34 @@ fn render_spectrum(
   }
   sb.write_string("\u001b[0m\n")
 
-  // --- Render bars with dB scale, ref line, and row-level brightness ---
+  // --- Peak frequency marker row (▼ above spectrum) ---
+  sb.write_string("\u001b[90m     \u001b[0m")
+  for bar in 0..<num_bars {
+    if bar % 3 == 2 && bar < num_bars - 1 {
+      sb.write_string(" ")
+      continue
+    }
+    if bar == dominant_bar && heights[bar] > 0 {
+      sb.write_string("\u001b[1;33m▼\u001b[0m")
+    } else {
+      // Faint vertical grid at label positions
+      let mut is_grid = false
+      for j in 0..<grid_bars.length() {
+        if grid_bars[j] == bar {
+          is_grid = true
+          break
+        }
+      }
+      if is_grid {
+        sb.write_string("\u001b[90m╎\u001b[0m")
+      } else {
+        sb.write_string(" ")
+      }
+    }
+  }
+  sb.write_string("\n")
+
+  // --- Render bars with dB scale, ref line, caps, and grid ---
   for row in 0..<max_height {
     render_db_scale(sb, row, max_height)
     let level_top = (max_height - row) * sub_res
@@ -368,14 +440,26 @@ fn render_spectrum(
         }
         continue
       }
+      // Magnitude ratio for this bar (for color intensity)
+      let height_ratio = heights[bar].to_double() / max_levels.to_double()
       match
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
-          sb.write_string(gradient_color_row(bar, num_bars, row, max_height))
+          sb.write_string(
+            gradient_color_full(bar, num_bars, row, max_height, height_ratio),
+          )
           sb.write_string("█")
         }
+        BarCap => {
+          sb.write_string(
+            gradient_color_full(bar, num_bars, row, max_height, height_ratio),
+          )
+          sb.write_string("▀")
+        }
         PartialBlock(frac) => {
-          sb.write_string(gradient_color_row(bar, num_bars, row, max_height))
+          sb.write_string(
+            gradient_color_full(bar, num_bars, row, max_height, height_ratio),
+          )
           sb.write_string(partial_blocks[frac])
         }
         PeakMarker => {
@@ -384,12 +468,23 @@ fn render_spectrum(
           sb.write_string("━")
           sb.write_string("\u001b[22m")
         }
-        Empty =>
-          if ref_line {
+        Empty => {
+          // Vertical grid line at label positions
+          let mut is_grid = false
+          for j in 0..<grid_bars.length() {
+            if grid_bars[j] == bar {
+              is_grid = true
+              break
+            }
+          }
+          if is_grid {
+            sb.write_string("\u001b[90m╎\u001b[0m")
+          } else if ref_line {
             sb.write_string("\u001b[90m┄\u001b[0m")
           } else {
             sb.write_string(" ")
           }
+        }
       }
     }
     sb.write_string(ansi_reset)
@@ -424,19 +519,12 @@ fn render_spectrum(
 
   // --- Frequency axis labels ---
   sb.write_string("\u001b[90m     ")
-  let freq_labels : Array[Int32] = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
   let mut label_line = ""
   let mut label_pos = 0
   for i in 0..<num_bars {
     let mut found_label = ""
     for j in 0..<freq_labels.length() {
-      let target_bar = freq_to_bar(
-        freq_labels[j].to_double(),
-        num_bars,
-        half_fft,
-        sample_rate,
-      )
-      if target_bar == i {
+      if grid_bars[j] == i {
         found_label = format_freq(freq_labels[j])
         break
       }
