@@ -1,0 +1,14 @@
+// Package imports for moonFFTmusic main executable
+import {
+  "moonbitlang/core/math",
+  "moonbitlang/core/env",
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/string",
+}
+
+// Only native target supports file I/O and terminal output
+
+supported_targets = "-all+native"
+
+pkgtype(kind: "executable")
