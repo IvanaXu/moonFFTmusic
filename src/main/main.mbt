@@ -1,24 +1,26 @@
 // =============================================================================
 // Main Program — Audio spectrum visualizer entry point
 //
-// Optimized with MoonBit features:
-//   - SoA FFT: separate re/im Array[Double], zero allocations in hot loop
-//   - Precomputed twiddle table: single table reused across all FFT calls
-//   - Precomputed Hann window: coefficients computed once at startup
-//   - Precomputed DisplayContext: bin mapping, grid positions, colors
-//   - BeatDetector: energy history for rhythmic pulse detection
-//   - Array::fold for RMS, match patterns for arg parsing
+// Second-round optimizations:
+//   - Pre-allocated mag_sq[], magnitudes[], heights[], waveform[] arrays
+//     (zero per-frame array allocations)
+//   - mag² computation (no sqrt) for all bins, sqrt only for 60 displayed bars
+//   - Bin aggregation: max mag² across bin range per bar
+//   - Reusable arrays passed to render_spectrum
+//
+// First-round optimizations (already in place):
+//   - SoA FFT with precomputed twiddle table
+//   - Precomputed Hann window
+//   - Precomputed DisplayContext (bin mapping, grid, colors, color_table)
+//   - BeatDetector with rolling sum
 // =============================================================================
 
 ///|
-/// Check if a number is a power of 2 and >= minimum
-/// Uses bit trick: power of 2 has exactly one bit set, so (n & (n-1)) == 0
 fn is_power_of_two(n : Int32) -> Bool {
   n > 0 && (n & (n - 1)) == 0
 }
 
 ///|
-/// Parse FFT size from argument string, defaulting to 1024
 fn parse_fft_size(arg : String?) -> Int32 {
   match arg {
     Some(s) => @string.parse_int(s) catch { _ => 1024 }
@@ -27,9 +29,6 @@ fn parse_fft_size(arg : String?) -> Int32 {
 }
 
 ///|
-/// Entry point: parse arguments, read WAV file, run visualization loop
-///
-/// Usage: moonFFTmusic <wav_file> [fft_size]
 async fn main {
   // --- Parse command line arguments ---
   let args = @env.args()
@@ -85,11 +84,8 @@ async fn main {
   let hop_size = fft_size / 2
 
   // --- Precompute all FFT tables ONCE at startup ---
-  // Twiddle factors: single table of size N/2, reused via striding
   let (tw_re, tw_im) = precompute_twiddles_soa(fft_size)
-  // Hann window coefficients
   let hann = precompute_hann_window(fft_size)
-  // log2(fft_size) for bit-reversal
   let bits = log2_int(fft_size)
 
   // --- Precompute display context ONCE at startup ---
@@ -102,7 +98,7 @@ async fn main {
     fft_size,
   )
 
-  // --- Initialize beat detector (43 frames ~ 1 second at 50ms refresh) ---
+  // --- Initialize beat detector ---
   let beat_detector = BeatDetector::new(43)
 
   // --- Initialize peak hold arrays ---
@@ -112,9 +108,14 @@ async fn main {
   // --- Initialize temporal smoothing state ---
   let prev_heights = Array::make(num_bars, 0)
 
-  // --- Pre-allocate re/im arrays for FFT (reused every frame, zero alloc) ---
-  let re = Array::make(fft_size, 0.0)
-  let im = Array::make(fft_size, 0.0)
+  // --- Pre-allocate ALL per-frame arrays (reused every frame, zero alloc) ---
+  let re = Array::make(fft_size, 0.0) // FFT real input/output
+  let im = Array::make(fft_size, 0.0) // FFT imaginary input/output
+  let half = fft_size / 2
+  let mag_sq = Array::make(half, 0.0) // mag² for all bins (no sqrt)
+  let magnitudes = Array::make(num_bars, 0.0) // aggregated magnitudes per bar
+  let heights = Array::make(num_bars, 0) // bar heights (reusable)
+  let waveform = Array::make(num_bars, 0.0) // waveform display data
 
   // --- Print initial info ---
   println("Loading WAV file: \{wav_path}")
@@ -126,11 +127,9 @@ async fn main {
 
   // --- Main visualization loop ---
   let total = wav.samples.length()
-  let half = fft_size / 2
   let mut pos = 0
   while pos + fft_size <= total {
     // Step 1: Fill re/im arrays directly from WAV samples (zero Complex alloc)
-    // im[] is already all zeros from initialization, just need to ensure it
     for i in 0..<fft_size {
       re[i] = wav.samples[pos + i]
       im[i] = 0.0
@@ -150,37 +149,48 @@ async fn main {
     // Step 4: Compute SoA FFT (in-place, zero allocations)
     fft_soa(re, im, tw_re, tw_im, bits)
 
-    // Step 5: Extract magnitudes (sqrt only for displayed bins)
-    let magnitudes = Array::makei(half, fn(i) {
+    // Step 5: Compute mag² for ALL bins (NO sqrt — just re²+im²)
+    for i in 0..<half {
       let r = re.unsafe_get(i)
       let imv = im.unsafe_get(i)
-      (r * r + imv * imv).sqrt()
-    })
+      mag_sq.unsafe_set(i, r * r + imv * imv)
+    }
 
-    // Step 6: Update beat detector
+    // Step 6: Bin aggregation — for each bar, find max mag² in bin range,
+    // then sqrt only once per bar (60 sqrts vs 512)
+    for bar in 0..<num_bars {
+      let start = ctx.bin_starts[bar]
+      let end = ctx.bin_ends[bar]
+      let mut max_sq = 0.0
+      for bin_idx in start..<end {
+        let sq = mag_sq.unsafe_get(bin_idx)
+        if sq > max_sq {
+          max_sq = sq
+        }
+      }
+      magnitudes.unsafe_set(bar, max_sq.sqrt())
+    }
+
+    // Step 7: Update beat detector
     let beat_intensity = beat_detector.update(rms)
 
-    // Step 7: Build waveform display data (downsampled chunk)
-    let waveform = Array::makei(num_bars, fn(i) {
+    // Step 8: Fill waveform array in-place (no allocation)
+    for i in 0..<num_bars {
       let idx = pos + i * fft_size / num_bars
-      if idx < total {
-        wav.samples[idx]
-      } else {
-        0.0
-      }
-    })
+      waveform[i] = if idx < total { wav.samples[idx] } else { 0.0 }
+    }
 
-    // Step 8: Render and display
+    // Step 9: Render and display (all arrays reused, zero alloc)
     let display = render_spectrum(
-      magnitudes, ctx, peak_heights, peak_frames, prev_heights, pos, total, rms,
-      beat_intensity, waveform,
+      magnitudes, ctx, peak_heights, peak_frames, prev_heights, heights, pos, total,
+      rms, beat_intensity, waveform,
     )
     println(display)
 
-    // Step 9: Sleep to control refresh rate
+    // Step 10: Sleep to control refresh rate
     @async.sleep(sleep_ms)
 
-    // Step 10: Advance with overlap
+    // Step 11: Advance with overlap
     pos += hop_size
   }
 

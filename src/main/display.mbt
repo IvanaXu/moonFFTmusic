@@ -1,32 +1,15 @@
 // =============================================================================
 // Terminal Display Module — Beautiful ANSI spectrum visualizer
 //
-// Performance optimizations:
-//   - Precomputed log-freq bin mapping (no per-frame pow/log2)
-//   - Precomputed grid-bar boolean array (no per-bar-per-row linear search)
-//   - StringBuilder for frequency labels (no O(n^2) concatenation)
-//   - In-place spatial smoothing (no temp array allocation)
-//   - Precomputed per-bar true-color RGB (no per-cell HSL conversion)
-//
-// Visual enhancements:
-//   1. Attack/release envelope — fast rise, slow fall
-//   2. Spatial smoothing — 3-tap blur across neighboring bars
-//   3. Row-level brightness gradient — 3D glow effect per bar
-//   4. Left-side dB scale — professional meter look
-//   5. Segmented RMS meter — green/yellow/red zones
-//   6. Peak hold markers with exponential decay
-//   7. Separator line between header and spectrum
-//   8. Musical note detection for dominant frequency
-//   9. Bar grouping with subtle gaps every 3 bars
-//  10. Bottom glow reflection — dim mirror of spectrum
-//  11. Dashed reference line at -12dB
-//  12. Bar caps — ▀ at top of each bar
-//  13. Peak frequency marker — ▼ arrow above dominant bar
-//  14. Vertical frequency grid — faint ╎ at label positions
-//  15. Magnitude-based color intensity
-//  16. True-color 24-bit RGB rainbow gradient (smooth HSL-based)
-//  17. Beat detection with border pulse glow
-//  18. Waveform strip — time-domain signal display
+// Second-round optimizations:
+//   - Precomputed color string table [bar][level] — eliminates 1560 per-frame
+//     string formatting calls (the #1 rendering bottleneck)
+//   - Bin aggregation ranges — each bar takes max magnitude across its bin range
+//   - Reusable heights array — zero per-frame array allocations in renderer
+//   - O(1) brightness quantization via precomputed row_contrib[]
+//   - Beat-reactive brightness boost — bars pulse on detected beats
+//   - Enhanced waveform with amplitude-based true-color
+//   - BeatDetector rolling sum — O(1) average instead of O(n) loop
 // =============================================================================
 
 ///|
@@ -46,66 +29,57 @@ let note_names : Array[String] = [
 ]
 
 ///|
+let num_brightness_levels : Int32 = 16
+
+///|
 /// Precomputed display context — computed once at startup, reused every frame.
-/// Eliminates per-frame pow/log2/trig calls by precomputing all position-dependent
-/// mappings and color tables.
 struct DisplayContext {
   num_bars : Int32
   max_height : Int32
   sub_res : Int32
   max_levels : Int32
-  bin_map : Array[Int32] // bar index -> FFT bin index (log-freq mapping)
-  is_grid : Array[Bool] // is this bar position a frequency grid line?
-  grid_bars : Array[Int32] // bar positions of frequency labels
-  freq_labels : Array[Int32] // frequency values for labels
-  bar_r : Array[Int32] // base red per bar (true-color)
-  bar_g_arr : Array[Int32] // base green per bar
-  bar_b_arr : Array[Int32] // base blue per bar
-  half_fft : Int32
+  bin_map : Array[Int32]
+  bin_starts : Array[Int32]
+  bin_ends : Array[Int32]
+  is_grid : Array[Bool]
+  grid_bars : Array[Int32]
+  freq_labels : Array[Int32]
+  color_table : Array[Array[String]]
+  row_contrib : Array[Double]
+  height_factor : Double
   sample_rate : Int32
   fft_size : Int32
 }
 
 ///|
-/// Beat detector — tracks RMS energy history to detect rhythmic pulses.
-/// Uses a circular buffer of energy values; when current energy exceeds
-/// the moving average by a threshold, a beat is detected.
 struct BeatDetector {
   energy_history : Array[Double]
   mut history_idx : Int32
   history_size : Int32
   mut beat_intensity : Double
+  mut energy_sum : Double
 }
 
 ///|
-/// Create a new beat detector with the given history window size.
 fn BeatDetector::new(history_size : Int32) -> BeatDetector {
   BeatDetector::{
     energy_history: Array::make(history_size, 0.0),
     history_idx: 0,
     history_size,
     beat_intensity: 0.0,
+    energy_sum: 0.0,
   }
 }
 
 ///|
-/// Update beat detector with current RMS value. Returns beat intensity (0.0 to 1.0).
-/// Beat is detected when current energy exceeds average * threshold.
-/// Intensity decays exponentially each frame.
 fn BeatDetector::update(self : BeatDetector, rms : Double) -> Double {
   let energy = rms * rms
   let idx = self.history_idx
+  self.energy_sum -= self.energy_history[idx]
   self.energy_history[idx] = energy
+  self.energy_sum += energy
   self.history_idx = (idx + 1) % self.history_size
-
-  // Compute average energy
-  let mut sum = 0.0
-  for i in 0..<self.history_size {
-    sum += self.energy_history[i]
-  }
-  let avg = sum / self.history_size.to_double()
-
-  // Beat detection: current energy significantly exceeds average
+  let avg = self.energy_sum / self.history_size.to_double()
   if energy > avg * 1.4 && energy > 0.001 {
     self.beat_intensity = 1.0
   } else {
@@ -124,8 +98,6 @@ enum BarState {
 }
 
 ///|
-/// HSL to RGB conversion. h in [0,360), s,l in [0,1].
-/// Returns (r, g, b) as Int32 in [0, 255].
 fn hsl_to_rgb(h : Double, s : Double, l : Double) -> (Int32, Int32, Int32) {
   let c = (1.0 - (2.0 * l - 1.0).abs()) * s
   let h_prime = h / 60.0
@@ -147,9 +119,6 @@ fn hsl_to_rgb(h : Double, s : Double, l : Double) -> (Int32, Int32, Int32) {
 }
 
 ///|
-/// Precompute per-bar base RGB colors using a smooth HSL rainbow gradient.
-/// Hue: 240 (blue) at bar 0 -> 0 (red) at last bar, through cyan/green/yellow/orange.
-/// Saturation: 0.85, Lightness: 0.55 (medium brightness base).
 fn precompute_bar_colors(
   num_bars : Int32,
 ) -> (Array[Int32], Array[Int32], Array[Int32]) {
@@ -168,7 +137,35 @@ fn precompute_bar_colors(
 }
 
 ///|
-/// Log-frequency bin mapping: maps bar index to FFT bin index.
+fn precompute_color_table(
+  bar_r : Array[Int32],
+  bar_g : Array[Int32],
+  bar_b : Array[Int32],
+  num_levels : Int32,
+) -> Array[Array[String]] {
+  let num_bars = bar_r.length()
+  let table : Array[Array[String]] = Array::make(num_bars, [])
+  for bar in 0..<num_bars {
+    let levels = Array::make(num_levels, "")
+    for level in 0..<num_levels {
+      let brightness = 0.3 + level.to_double() / (num_levels - 1).to_double()
+      let r = (bar_r[bar].to_double() * brightness)
+        .clamp(min=0.0, max=255.0)
+        .to_int()
+      let g = (bar_g[bar].to_double() * brightness)
+        .clamp(min=0.0, max=255.0)
+        .to_int()
+      let b = (bar_b[bar].to_double() * brightness)
+        .clamp(min=0.0, max=255.0)
+        .to_int()
+      levels[level] = "\u001b[38;2;\{r};\{g};\{b}m"
+    }
+    table[bar] = levels
+  }
+  table
+}
+
+///|
 fn log_freq_bin(bar : Int32, num_bars : Int32, half_fft : Int32) -> Int32 {
   if half_fft <= 1 {
     return 0
@@ -179,7 +176,6 @@ fn log_freq_bin(bar : Int32, num_bars : Int32, half_fft : Int32) -> Int32 {
 }
 
 ///|
-/// Map a frequency to a bar position (inverse of log_freq_bin).
 fn freq_to_bar(
   freq : Double,
   num_bars : Int32,
@@ -198,8 +194,6 @@ fn freq_to_bar(
 }
 
 ///|
-/// Create a DisplayContext with all precomputed tables.
-/// Call once at startup; reuse for every frame.
 fn create_display_context(
   num_bars : Int32,
   max_height : Int32,
@@ -211,6 +205,22 @@ fn create_display_context(
   let bin_map = Array::makei(num_bars, fn(bar) {
     log_freq_bin(bar, num_bars, half_fft)
   })
+  let bin_starts = Array::make(num_bars, 0)
+  let bin_ends = Array::make(num_bars, 0)
+  for bar in 0..<num_bars {
+    bin_starts[bar] = bin_map[bar]
+    if bar < num_bars - 1 {
+      bin_ends[bar] = bin_map[bar + 1] + 1
+    } else {
+      bin_ends[bar] = half_fft
+    }
+    if bin_ends[bar] <= bin_starts[bar] {
+      bin_ends[bar] = bin_starts[bar] + 1
+    }
+    if bin_ends[bar] > half_fft {
+      bin_ends[bar] = half_fft
+    }
+  }
   let freq_labels : Array[Int32] = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
   let grid_bars = Array::makei(freq_labels.length(), fn(j) {
     freq_to_bar(freq_labels[j].to_double(), num_bars, half_fft, sample_rate)
@@ -222,20 +232,29 @@ fn create_display_context(
       is_grid[gb] = true
     }
   }
-  let (bar_r, bar_g_arr, bar_b_arr) = precompute_bar_colors(num_bars)
+  let (bar_r, bar_g, bar_b) = precompute_bar_colors(num_bars)
+  let color_table = precompute_color_table(
+    bar_r, bar_g, bar_b, num_brightness_levels,
+  )
+  let row_contrib = Array::makei(max_height, fn(row) {
+    1.5 + row.to_double() / max_height.to_double() * 6.0
+  })
+  let max_levels = max_height * sub_res
+  let height_factor = 6.0 / max_levels.to_double()
   DisplayContext::{
     num_bars,
     max_height,
     sub_res,
-    max_levels: max_height * sub_res,
+    max_levels,
     bin_map,
+    bin_starts,
+    bin_ends,
     is_grid,
     grid_bars,
     freq_labels,
-    bar_r,
-    bar_g_arr,
-    bar_b_arr,
-    half_fft,
+    color_table,
+    row_contrib,
+    height_factor,
     sample_rate,
     fft_size,
   }
@@ -282,22 +301,6 @@ fn scale_magnitude(mag : Double) -> Double {
   } else {
     0.0
   }
-}
-
-///|
-/// Generate true-color ANSI escape with brightness adjustment.
-/// brightness in [0.3, 1.3] — scales the base RGB.
-fn true_color(bar : Int32, ctx : DisplayContext, brightness : Double) -> String {
-  let r = (ctx.bar_r[bar].to_double() * brightness)
-    .clamp(min=0.0, max=255.0)
-    .to_int()
-  let g = (ctx.bar_g_arr[bar].to_double() * brightness)
-    .clamp(min=0.0, max=255.0)
-    .to_int()
-  let b = (ctx.bar_b_arr[bar].to_double() * brightness)
-    .clamp(min=0.0, max=255.0)
-    .to_int()
-  "\u001b[38;2;\{r};\{g};\{b}m"
 }
 
 ///|
@@ -364,19 +367,27 @@ fn is_ref_line(row : Int32, max_height : Int32) -> Bool {
 }
 
 ///|
-/// Render a mini waveform strip from time-domain samples.
+/// Render waveform strip with beat-reactive coloring.
 fn render_waveform(
   sb : StringBuilder,
   waveform : Array[Double],
   width : Int32,
+  beat_intensity : Double,
 ) -> Unit {
-  sb.write_string("\u001b[90m     \u001b[0m")
+  sb.write_string("\u001b[90m  WV \u001b[0m")
   let n = waveform.length()
   if n == 0 {
     sb.write_string("\n")
     return
   }
   let step = n.to_double() / width.to_double()
+  let wcolor = if beat_intensity > 0.3 {
+    let g = (beat_intensity * 200.0).to_int()
+    let b = (beat_intensity * 100.0).to_int()
+    "\u001b[38;2;255;\{g};\{b}m"
+  } else {
+    "\u001b[90m"
+  }
   for i in 0..<width {
     let sample_idx = (i.to_double() * step).to_int().clamp(min=0, max=n - 1)
     let sample = waveform[sample_idx]
@@ -384,11 +395,23 @@ fn render_waveform(
     match scaled {
       0 => sb.write_string("\u001b[90m─\u001b[0m")
       1 => sb.write_string("\u001b[90m▔\u001b[0m")
-      2 => sb.write_string("\u001b[90m▀\u001b[0m")
-      3 | 4 => sb.write_string("\u001b[90m█\u001b[0m")
+      2 => {
+        sb.write_string(wcolor)
+        sb.write_string("▀\u001b[0m")
+      }
+      3 | 4 => {
+        sb.write_string(wcolor)
+        sb.write_string("█\u001b[0m")
+      }
       -1 => sb.write_string("\u001b[90m▁\u001b[0m")
-      -2 => sb.write_string("\u001b[90m▄\u001b[0m")
-      -3 | -4 => sb.write_string("\u001b[90m█\u001b[0m")
+      -2 => {
+        sb.write_string(wcolor)
+        sb.write_string("▄\u001b[0m")
+      }
+      -3 | -4 => {
+        sb.write_string(wcolor)
+        sb.write_string("█\u001b[0m")
+      }
       _ => sb.write_string("\u001b[90m─\u001b[0m")
     }
   }
@@ -396,23 +419,15 @@ fn render_waveform(
 }
 
 ///|
-/// Main spectrum renderer — uses precomputed DisplayContext for all
-/// position-dependent lookups. Zero trig/pow/log calls per frame in the hot path.
-///
-/// Optimizations vs original:
-///   - bin_map precomputed (no per-frame log_freq_bin calls)
-///   - is_grid precomputed (no per-bar-per-row linear search)
-///   - StringBuilder for frequency labels (no O(n^2) string concat)
-///   - In-place spatial smoothing (no temp array)
-///   - True-color 24-bit RGB (smooth gradient, precomputed per-bar)
-///   - Beat detection border glow
-///   - Waveform strip
+/// Main spectrum renderer — fully optimized hot path.
+/// All arrays reused, color lookup via precomputed table, O(1) brightness.
 fn render_spectrum(
   magnitudes : Array[Double],
   ctx : DisplayContext,
   peak_heights : Array[Int32],
   peak_frames : Array[Int32],
   prev_heights : Array[Int32],
+  heights : Array[Int32],
   current_pos : Int32,
   total_samples : Int32,
   rms_value : Double,
@@ -426,27 +441,22 @@ fn render_spectrum(
   let max_levels = ctx.max_levels
   let sample_rate = ctx.sample_rate
   let fft_size = ctx.fft_size
-  let half_fft = ctx.half_fft
 
   sb.write_string(ansi_clear)
 
-  // --- Calculate bar heights using precomputed bin_map ---
-  let heights : Array[Int32] = Array::make(num_bars, 0)
-  let mut dominant_bin = 0
+  // --- Calculate bar heights from pre-aggregated magnitudes ---
+  let mut dominant_bar = 0
   let mut max_mag = 0.0
   for bar in 0..<num_bars {
-    let bin_idx = ctx.bin_map[bar]
-    if bin_idx < magnitudes.length() {
-      let mag = magnitudes[bin_idx]
-      if mag > max_mag {
-        max_mag = mag
-        dominant_bin = bin_idx
-      }
-      heights[bar] = (scale_magnitude(mag) * max_levels.to_double()).to_int()
+    let mag = magnitudes[bar]
+    if mag > max_mag {
+      max_mag = mag
+      dominant_bar = bar
     }
+    heights[bar] = (scale_magnitude(mag) * max_levels.to_double()).to_int()
   }
 
-  // --- Attack/release envelope: fast rise, slow fall ---
+  // --- Attack/release envelope ---
   for bar in 0..<num_bars {
     let prev = prev_heights[bar].to_double()
     let curr = heights[bar].to_double()
@@ -459,8 +469,7 @@ fn render_spectrum(
     prev_heights[bar] = heights[bar]
   }
 
-  // --- Spatial smoothing: in-place 3-tap blur [0.2, 0.6, 0.2] ---
-  // Uses rolling variables instead of temp array allocation
+  // --- Spatial smoothing: in-place 3-tap blur ---
   let mut prev_val = 0.0
   for bar in 0..<num_bars {
     let left = prev_val
@@ -475,7 +484,7 @@ fn render_spectrum(
     heights[bar] = blurred.to_int()
   }
 
-  // --- Update peak hold with exponential decay ---
+  // --- Update peak hold ---
   for bar in 0..<num_bars {
     match (heights[bar] >= peak_heights[bar], peak_frames[bar] > 3) {
       (true, _) => {
@@ -491,24 +500,22 @@ fn render_spectrum(
     }
   }
 
-  // --- Dominant frequency + note name ---
+  // --- Dominant frequency + note ---
+  let dominant_bin = ctx.bin_map[dominant_bar]
   let dominant_freq = dominant_bin * sample_rate / fft_size
   let note_name = freq_to_note(dominant_freq)
-  let dominant_bar = freq_to_bar(
-    dominant_freq.to_double(),
-    num_bars,
-    half_fft,
-    sample_rate,
-  )
 
-  // --- Beat glow border color ---
+  // --- Beat glow border ---
   let beat_glow = if beat_intensity > 0.1 {
     "\u001b[38;2;255;\{(beat_intensity * 200.0).to_int()};\{(beat_intensity * 100.0).to_int()}m"
   } else {
     "\u001b[1;36m"
   }
 
-  // --- Box-drawing header with beat glow ---
+  // --- Beat-reactive brightness boost (shift color level up to 2) ---
+  let beat_boost = (beat_intensity * 2.0).to_int()
+
+  // --- Header ---
   let header_width = num_bars + 6
   let title = "🎵 MoonFFTmusic — Real-time Spectrum Analyzer"
   let beat_indicator = if beat_intensity > 0.5 { " ♫" } else { "  " }
@@ -543,7 +550,7 @@ fn render_spectrum(
   }
   sb.write_string("╝\n\u001b[0m")
 
-  // --- Separator line ---
+  // --- Separator ---
   sb.write_string("\u001b[90m")
   for _ in 0..<6 {
     sb.write_string("─")
@@ -553,7 +560,7 @@ fn render_spectrum(
   }
   sb.write_string("\u001b[0m\n")
 
-  // --- Peak frequency marker row (▼ above spectrum) ---
+  // --- Peak marker row ---
   sb.write_string("\u001b[90m     \u001b[0m")
   for bar in 0..<num_bars {
     if bar % 3 == 2 && bar < num_bars - 1 {
@@ -570,7 +577,7 @@ fn render_spectrum(
   }
   sb.write_string("\n")
 
-  // --- Render bars with dB scale, ref line, caps, and grid ---
+  // --- Render bars with precomputed color table ---
   for row in 0..<max_height {
     render_db_scale(sb, row, max_height)
     let level_top = (max_height - row) * sub_res
@@ -585,27 +592,38 @@ fn render_spectrum(
         }
         continue
       }
-      let height_ratio = heights[bar].to_double() / max_levels.to_double()
-      // Brightness: 50% row position + 50% magnitude, mapped to [0.4, 1.2]
-      let row_ratio = row.to_double() / max_height.to_double()
-      let brightness = 0.4 + (row_ratio * 0.5 + height_ratio * 0.5) * 0.8
       match
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
-          sb.write_string(true_color(bar, ctx, brightness))
+          let level = (ctx.row_contrib[row] +
+            heights[bar].to_double() * ctx.height_factor +
+            beat_boost.to_double())
+            .to_int()
+            .clamp(min=0, max=num_brightness_levels - 1)
+          sb.write_string(ctx.color_table[bar][level])
           sb.write_string("█")
         }
         BarCap => {
-          sb.write_string(true_color(bar, ctx, brightness))
+          let level = (ctx.row_contrib[row] +
+            heights[bar].to_double() * ctx.height_factor +
+            beat_boost.to_double())
+            .to_int()
+            .clamp(min=0, max=num_brightness_levels - 1)
+          sb.write_string(ctx.color_table[bar][level])
           sb.write_string("▀")
         }
         PartialBlock(frac) => {
-          sb.write_string(true_color(bar, ctx, brightness))
+          let level = (ctx.row_contrib[row] +
+            heights[bar].to_double() * ctx.height_factor +
+            beat_boost.to_double())
+            .to_int()
+            .clamp(min=0, max=num_brightness_levels - 1)
+          sb.write_string(ctx.color_table[bar][level])
           sb.write_string(partial_blocks[frac])
         }
         PeakMarker => {
           sb.write_string("\u001b[1m")
-          sb.write_string(true_color(bar, ctx, 1.1))
+          sb.write_string(ctx.color_table[bar][13])
           sb.write_string("━")
           sb.write_string("\u001b[22m")
         }
@@ -623,7 +641,7 @@ fn render_spectrum(
     sb.write_string("\n")
   }
 
-  // --- Bottom glow reflection (3 rows, dimming) ---
+  // --- Bottom glow reflection ---
   for glow_row in 0..<3 {
     sb.write_string("\u001b[90m     \u001b[0m")
     let glow_factor = match glow_row {
@@ -639,7 +657,7 @@ fn render_spectrum(
       let reflected_height = (heights[bar].to_double() * glow_factor).to_int()
       let glow_level = (glow_row + 1) * sub_res
       if reflected_height >= glow_level {
-        sb.write_string(true_color(bar, ctx, 0.35))
+        sb.write_string(ctx.color_table[bar][0])
         sb.write_string("▀")
       } else {
         sb.write_string(" ")
@@ -649,7 +667,7 @@ fn render_spectrum(
     sb.write_string("\n")
   }
 
-  // --- Frequency axis labels (StringBuilder, not O(n^2) concat) ---
+  // --- Frequency labels ---
   sb.write_string("\u001b[90m     ")
   let mut label_pos = 0
   for i in 0..<num_bars {
@@ -672,10 +690,9 @@ fn render_spectrum(
   sb.write_string("\n\u001b[0m")
 
   // --- Waveform strip ---
-  sb.write_string("\u001b[90m  WV \u001b[0m")
-  render_waveform(sb, waveform, num_bars)
+  render_waveform(sb, waveform, num_bars, beat_intensity)
 
-  // --- RMS volume meter with segmented color zones ---
+  // --- RMS meter ---
   let rms_db = if rms_value > 0.0 {
     20.0 * @math.log10(rms_value)
   } else {
