@@ -1,15 +1,17 @@
 // =============================================================================
 // Terminal Display Module — Beautiful ANSI spectrum visualizer
 //
-// Second-round optimizations:
-//   - Precomputed color string table [bar][level] — eliminates 1560 per-frame
-//     string formatting calls (the #1 rendering bottleneck)
-//   - Bin aggregation ranges — each bar takes max magnitude across its bin range
-//   - Reusable heights array — zero per-frame array allocations in renderer
-//   - O(1) brightness quantization via precomputed row_contrib[]
-//   - Beat-reactive brightness boost — bars pulse on detected beats
-//   - Enhanced waveform with amplitude-based true-color
-//   - BeatDetector rolling sum — O(1) average instead of O(n) loop
+// Optimized display effects:
+//   - Continuous spectrum (no bar grouping gaps) for seamless visual flow
+//   - 32-level brightness gradient (smoother color transitions)
+//   - Enhanced HSL color gradient with variable saturation/lightness
+//   - Power-curve magnitude scaling for better dynamic range
+//   - Richer bottom glow reflection with proper bar colors
+//   - Smoother attack/release envelope and spatial smoothing
+//   - True-color waveform with amplitude-based coloring
+//   - Precomputed color string table [bar][level] — eliminates per-frame
+//     string formatting calls
+//   - Beat-reactive brightness boost and border glow
 // =============================================================================
 
 ///|
@@ -29,7 +31,7 @@ let note_names : Array[String] = [
 ]
 
 ///|
-let num_brightness_levels : Int32 = 16
+let num_brightness_levels : Int32 = 32
 
 ///|
 /// Precomputed display context — computed once at startup, reused every frame.
@@ -127,8 +129,13 @@ fn precompute_bar_colors(
   let bar_b = Array::make(num_bars, 0)
   for bar in 0..<num_bars {
     let ratio = bar.to_double() / (num_bars - 1).to_double()
-    let hue = 240.0 * (1.0 - ratio)
-    let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
+    // Hue: 260 (indigo) -> 0 (red), wide vibrant spectrum
+    let hue = 260.0 * (1.0 - ratio)
+    // Saturation: peaks at mid-range (0.95), lower at extremes (0.75)
+    let sat = 0.75 + 0.2 * (1.0 - (2.0 * ratio - 1.0).abs())
+    // Lightness: darker at bass (0.42), brighter at treble (0.60)
+    let light = 0.42 + 0.18 * ratio
+    let (r, g, b) = hsl_to_rgb(hue, sat, light)
     bar_r[bar] = r
     bar_g[bar] = g
     bar_b[bar] = b
@@ -148,7 +155,9 @@ fn precompute_color_table(
   for bar in 0..<num_bars {
     let levels = Array::make(num_levels, "")
     for level in 0..<num_levels {
-      let brightness = 0.3 + level.to_double() / (num_levels - 1).to_double()
+      // Brightness range: 0.15 (deep dark) -> 1.0 (full bright)
+      let brightness = 0.15 +
+        level.to_double() / (num_levels - 1).to_double() * 0.85
       let r = (bar_r[bar].to_double() * brightness)
         .clamp(min=0.0, max=255.0)
         .to_int()
@@ -236,11 +245,13 @@ fn create_display_context(
   let color_table = precompute_color_table(
     bar_r, bar_g, bar_b, num_brightness_levels,
   )
+  // Row contribution: range [3.0, 17.0] for 32 brightness levels
+  // Bottom rows dimmer, top rows brighter — 3D glow effect
   let row_contrib = Array::makei(max_height, fn(row) {
-    1.5 + row.to_double() / max_height.to_double() * 6.0
+    3.0 + row.to_double() / max_height.to_double() * 14.0
   })
   let max_levels = max_height * sub_res
-  let height_factor = 6.0 / max_levels.to_double()
+  let height_factor = 14.0 / max_levels.to_double()
   DisplayContext::{
     num_bars,
     max_height,
@@ -297,7 +308,8 @@ fn freq_to_note(hz : Int32) -> String {
 ///|
 fn scale_magnitude(mag : Double) -> Double {
   if mag > 0.0 {
-    (@math.log10(mag * 1000.0 + 1.0) / 3.0).clamp(min=0.0, max=1.0)
+    // Power curve: boosts low/mid values for better detail visibility
+    @math.pow(mag, 0.6).clamp(min=0.0, max=1.0)
   } else {
     0.0
   }
@@ -367,7 +379,7 @@ fn is_ref_line(row : Int32, max_height : Int32) -> Bool {
 }
 
 ///|
-/// Render waveform strip with beat-reactive coloring.
+/// Render waveform strip with true-color amplitude-based coloring.
 fn render_waveform(
   sb : StringBuilder,
   waveform : Array[Double],
@@ -381,37 +393,46 @@ fn render_waveform(
     return
   }
   let step = n.to_double() / width.to_double()
-  let wcolor = if beat_intensity > 0.3 {
-    let g = (beat_intensity * 200.0).to_int()
-    let b = (beat_intensity * 100.0).to_int()
-    "\u001b[38;2;255;\{g};\{b}m"
-  } else {
-    "\u001b[90m"
-  }
   for i in 0..<width {
     let sample_idx = (i.to_double() * step).to_int().clamp(min=0, max=n - 1)
     let sample = waveform[sample_idx]
     let scaled = (sample * 4.0).clamp(min=-4.0, max=4.0).to_int()
+    let abs_amp = sample.abs().clamp(min=0.0, max=1.0)
+    let amp_int = (abs_amp * 255.0).to_int()
     match scaled {
       0 => sb.write_string("\u001b[90m─\u001b[0m")
-      1 => sb.write_string("\u001b[90m▔\u001b[0m")
+      1 => {
+        let g = 180 + amp_int / 4
+        sb.write_string("\u001b[38;2;80;\{g};200m▔\u001b[0m")
+      }
       2 => {
-        sb.write_string(wcolor)
-        sb.write_string("▀\u001b[0m")
+        let g = 200 + amp_int / 5
+        sb.write_string("\u001b[38;2;60;\{g};180m▀\u001b[0m")
       }
-      3 | 4 => {
-        sb.write_string(wcolor)
-        sb.write_string("█\u001b[0m")
+      3 | 4 =>
+        if beat_intensity > 0.3 {
+          let r = 200 + (beat_intensity * 55.0).to_int()
+          sb.write_string("\u001b[38;2;\{r};255;100m█\u001b[0m")
+        } else {
+          let g = 220 + amp_int / 6
+          sb.write_string("\u001b[38;2;100;\{g};120m█\u001b[0m")
+        }
+      -1 => {
+        let b = 180 + amp_int / 4
+        sb.write_string("\u001b[38;2;80;150;\{b}m▁\u001b[0m")
       }
-      -1 => sb.write_string("\u001b[90m▁\u001b[0m")
       -2 => {
-        sb.write_string(wcolor)
-        sb.write_string("▄\u001b[0m")
+        let b = 200 + amp_int / 5
+        sb.write_string("\u001b[38;2;100;120;\{b}m▄\u001b[0m")
       }
-      -3 | -4 => {
-        sb.write_string(wcolor)
-        sb.write_string("█\u001b[0m")
-      }
+      -3 | -4 =>
+        if beat_intensity > 0.3 {
+          let r = 100 + (beat_intensity * 155.0).to_int()
+          sb.write_string("\u001b[38;2;\{r};150;255m█\u001b[0m")
+        } else {
+          let b = 220 + amp_int / 6
+          sb.write_string("\u001b[38;2;120;150;\{b}m█\u001b[0m")
+        }
       _ => sb.write_string("\u001b[90m─\u001b[0m")
     }
   }
@@ -456,20 +477,20 @@ fn render_spectrum(
     heights[bar] = (scale_magnitude(mag) * max_levels.to_double()).to_int()
   }
 
-  // --- Attack/release envelope ---
+  // --- Attack/release envelope (smoother rise, more responsive fall) ---
   for bar in 0..<num_bars {
     let prev = prev_heights[bar].to_double()
     let curr = heights[bar].to_double()
     let smoothed = if curr >= prev {
-      prev * 0.3 + curr * 0.7
+      prev * 0.4 + curr * 0.6
     } else {
-      prev * 0.85 + curr * 0.15
+      prev * 0.8 + curr * 0.2
     }
     heights[bar] = smoothed.to_int()
     prev_heights[bar] = heights[bar]
   }
 
-  // --- Spatial smoothing: in-place 3-tap blur ---
+  // --- Spatial smoothing: in-place 3-tap blur [0.25, 0.5, 0.25] ---
   let mut prev_val = 0.0
   for bar in 0..<num_bars {
     let left = prev_val
@@ -479,7 +500,7 @@ fn render_spectrum(
     } else {
       0.0
     }
-    let blurred = left * 0.2 + center * 0.6 + right * 0.2
+    let blurred = left * 0.25 + center * 0.5 + right * 0.25
     prev_val = center
     heights[bar] = blurred.to_int()
   }
@@ -512,8 +533,8 @@ fn render_spectrum(
     "\u001b[1;36m"
   }
 
-  // --- Beat-reactive brightness boost (shift color level up to 2) ---
-  let beat_boost = (beat_intensity * 2.0).to_int()
+  // --- Beat-reactive brightness boost (shift color level up to 4) ---
+  let beat_boost = (beat_intensity * 4.0).to_int()
 
   // --- Header ---
   let header_width = num_bars + 6
@@ -560,13 +581,9 @@ fn render_spectrum(
   }
   sb.write_string("\u001b[0m\n")
 
-  // --- Peak marker row ---
+  // --- Peak marker row (continuous, no bar gaps) ---
   sb.write_string("\u001b[90m     \u001b[0m")
   for bar in 0..<num_bars {
-    if bar % 3 == 2 && bar < num_bars - 1 {
-      sb.write_string(" ")
-      continue
-    }
     if bar == dominant_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
     } else if ctx.is_grid[bar] {
@@ -577,21 +594,13 @@ fn render_spectrum(
   }
   sb.write_string("\n")
 
-  // --- Render bars with precomputed color table ---
+  // --- Render bars with precomputed color table (continuous, no gaps) ---
   for row in 0..<max_height {
     render_db_scale(sb, row, max_height)
     let level_top = (max_height - row) * sub_res
     let level_bottom = (max_height - row - 1) * sub_res
     let ref_line = is_ref_line(row, max_height)
     for bar in 0..<num_bars {
-      if bar % 3 == 2 && bar < num_bars - 1 {
-        if ref_line {
-          sb.write_string("\u001b[90m·\u001b[0m")
-        } else {
-          sb.write_string(" ")
-        }
-        continue
-      }
       match
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
@@ -623,7 +632,7 @@ fn render_spectrum(
         }
         PeakMarker => {
           sb.write_string("\u001b[1m")
-          sb.write_string(ctx.color_table[bar][13])
+          sb.write_string(ctx.color_table[bar][26])
           sb.write_string("━")
           sb.write_string("\u001b[22m")
         }
@@ -641,23 +650,25 @@ fn render_spectrum(
     sb.write_string("\n")
   }
 
-  // --- Bottom glow reflection ---
+  // --- Bottom glow reflection with proper bar colors ---
   for glow_row in 0..<3 {
     sb.write_string("\u001b[90m     \u001b[0m")
     let glow_factor = match glow_row {
-      0 => 0.35
-      1 => 0.2
-      _ => 0.1
+      0 => 0.4
+      1 => 0.25
+      _ => 0.12
     }
     for bar in 0..<num_bars {
-      if bar % 3 == 2 && bar < num_bars - 1 {
-        sb.write_string(" ")
-        continue
-      }
       let reflected_height = (heights[bar].to_double() * glow_factor).to_int()
       let glow_level = (glow_row + 1) * sub_res
       if reflected_height >= glow_level {
-        sb.write_string(ctx.color_table[bar][0])
+        // Use proper color level based on glow row (dimmer further down)
+        let color_level = match glow_row {
+          0 => 10
+          1 => 6
+          _ => 3
+        }
+        sb.write_string(ctx.color_table[bar][color_level])
         sb.write_string("▀")
       } else {
         sb.write_string(" ")
