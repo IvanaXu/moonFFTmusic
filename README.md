@@ -3,6 +3,8 @@
 [![CI](https://github.com/IvanaXu/moonFFTmusic/actions/workflows/ci.yml/badge.svg)](https://github.com/IvanaXu/moonFFTmusic/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> https://mooncakes.io/docs/IvanAXu/moonFFTmusic@0.1.0
+
 A real-time audio spectrum visualizer written in [MoonBit](https://www.moonbitlang.com/).
 It reads a WAV file, performs Fast Fourier Transform (FFT) on audio chunks, and
 displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal.

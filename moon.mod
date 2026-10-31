@@ -2,11 +2,15 @@
 // Build: moon build
 // Run:   moon run src/main <wav_file> [fft_size]
 
-name = "moonfft/moonFFTmusic"
+name = "IvanAXu/moonFFTmusic"
 
 version = "0.1.0"
 
 readme = "README.md"
+
+repository = "https://github.com/IvanaXu/moonFFTmusic"
+
+license = "Apache-2.0"
 
 preferred_target = "native"
 
