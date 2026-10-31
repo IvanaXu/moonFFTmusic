@@ -4,8 +4,8 @@
 
 set -e
 
-# Ensure moon is in PATH
-export PATH="/workspace/.moon/bin:$PATH"
+# Ensure moon is in PATH (check both sandbox and host locations)
+export PATH="/root/.moon/bin:/workspace/.moon/bin:$PATH"
 
 # Default arguments
 WAV_FILE="${1:-test.wav}"

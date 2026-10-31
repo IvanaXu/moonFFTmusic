@@ -2,7 +2,7 @@
 
 A real-time audio spectrum visualizer written in [MoonBit](https://www.moonbitlang.com/).
 It reads a WAV file, performs Fast Fourier Transform (FFT) on audio chunks, and
-displays a live frequency spectrum as an ANSI bar chart in the terminal.
+displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal.
 
 ## Features
 
@@ -13,12 +13,24 @@ displays a live frequency spectrum as an ANSI bar chart in the terminal.
   with bit-reversal permutation and butterfly operations for performance.
 - **Hann Window**: Applies a Hann window function to each chunk before FFT to
   reduce spectral leakage at chunk boundaries.
-- **ANSI Spectrum Display**: Renders ~50 frequency bins as vertical bars with
-  Unicode block characters (█). Uses logarithmic magnitude scaling for better
-  visual frequency distribution. Colors transition from green (low frequencies)
-  to yellow (mid) to red (high).
-- **Real-time Playback**: Refreshes the display in a loop, advancing through the
-  audio file with 50% chunk overlap.
+
+### Beautiful Terminal Display
+
+- **🌈 Rainbow Gradient**: 256-color ANSI codes create a smooth blue → cyan →
+  green → yellow → orange → red → magenta gradient across frequency bars.
+- **▁▂▃▄▅▆▇█ Partial Blocks**: 8x vertical sub-row resolution for smooth bar
+  transitions — no more jagged tops.
+- **📊 Log-spaced Frequency Mapping**: Low (bass) frequencies get more visual
+  space, matching how human ears perceive sound.
+- **📈 Peak Hold with Gravity Decay**: Peak markers linger and slowly fall,
+  just like professional audio analyzers.
+- **🔲 Box-drawing Header**: Bordered header showing title, sample rate, FFT
+  size, dominant frequency, and time position.
+- **📍 Frequency Axis Labels**: 50Hz, 100Hz, 200Hz, 500Hz, 1kHz, 2kHz, 5kHz,
+  10kHz markers positioned under the correct bars.
+- **🔊 RMS Volume Meter**: Real-time RMS level in dB with a horizontal bar.
+- **⏳ Progress Bar**: Playback position with percentage and time display.
+- **🎵 Dominant Frequency**: Detects and displays the peak frequency in real-time.
 
 ## Project Structure
 
@@ -28,10 +40,10 @@ moonFFTmusic/
 ├── src/
 │   └── main/
 │       ├── moon.pkg      # Package config (imports, target)
-│       ├── main.mbt      # Main program (async loop)
+│       ├── main.mbt      # Main program (async loop, RMS, peak tracking)
 │       ├── fft.mbt       # FFT implementation (Complex, FFT, Hann window)
 │       ├── wav.mbt       # WAV file parser
-│       └── display.mbt   # Terminal ANSI bar chart renderer
+│       └── display.mbt   # Terminal ANSI renderer (gradient, peaks, labels)
 ├── gen_wav.py            # Test WAV file generator (sine wave)
 ├── run.sh                # Build and run script
 └── README.md             # This file
@@ -92,14 +104,20 @@ The generated file contains:
    float samples.
 2. **Chunk Processing**: Audio is processed in overlapping chunks (FFT size
    samples, 50% overlap).
-3. **Windowing**: A Hann window is applied to each chunk to reduce spectral
+3. **RMS Calculation**: Root mean square of the chunk is computed for the
+   volume meter.
+4. **Windowing**: A Hann window is applied to each chunk to reduce spectral
    leakage.
-4. **FFT**: The radix-2 Cooley-Tukey FFT transforms the time-domain samples
+5. **FFT**: The radix-2 Cooley-Tukey FFT transforms the time-domain samples
    into the frequency domain.
-5. **Magnitude**: The magnitude of each frequency bin is calculated.
-6. **Display**: Magnitudes are mapped to bar heights using a logarithmic scale
-   and rendered as colored vertical bars.
-7. **Refresh**: The display updates every 50ms, advancing through the audio.
+6. **Magnitude**: The magnitude of each frequency bin is calculated.
+7. **Peak Tracking**: Peak heights are updated with gravity decay for the
+   peak hold effect.
+8. **Display**: Magnitudes are mapped to bar heights using log-spaced frequency
+   mapping and logarithmic magnitude scaling, then rendered as rainbow-gradient
+   partial-block bars with peak markers, frequency labels, RMS meter, and
+   progress bar.
+9. **Refresh**: The display updates every 50ms, advancing through the audio.
 
 ## FFT Algorithm Details
 

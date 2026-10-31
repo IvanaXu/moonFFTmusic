@@ -63,10 +63,14 @@ async fn main {
   }
 
   // --- Display configuration ---
-  let num_bars = 50 // number of frequency bars to display
-  let max_height = 20 // maximum bar height in terminal rows
+  let num_bars = 60 // number of frequency bars to display
+  let max_height = 22 // maximum bar height in terminal rows
   let sleep_ms : Int32 = 50 // refresh interval in milliseconds
   let hop_size = fft_size / 2 // 50% overlap between chunks
+
+  // --- Initialize peak hold arrays ---
+  let peak_heights = Array::make(num_bars, 0)
+  let peak_frames = Array::make(num_bars, 0)
 
   // --- Print initial info ---
   println("Loading WAV file: \{wav_path}")
@@ -88,34 +92,46 @@ async fn main {
       }
     }
 
-    // Step 2: Apply Hann window to reduce spectral leakage
+    // Step 2: Calculate RMS of current chunk (for volume meter)
+    let mut sum_sq = 0.0
+    for i in 0..<fft_size {
+      let s = chunk[i].re
+      sum_sq = sum_sq + s * s
+    }
+    let rms = (sum_sq / fft_size.to_double()).sqrt()
+
+    // Step 3: Apply Hann window to reduce spectral leakage
     apply_hann_window(chunk)
 
-    // Step 3: Compute FFT (in-place transform)
+    // Step 4: Compute FFT (in-place transform)
     fft(chunk)
 
-    // Step 4: Calculate magnitudes for first half (real frequencies)
-    // Only the first N/2 bins contain unique frequency information
+    // Step 5: Calculate magnitudes for first half (real frequencies)
     let half = fft_size / 2
     let magnitudes = Array::make(half, 0.0)
     for i in 0..<half {
       magnitudes[i] = chunk[i].mag()
     }
 
-    // Step 5: Render spectrum bar chart to terminal
+    // Step 6: Render spectrum bar chart to terminal
     let display = render_spectrum(
       magnitudes,
       num_bars,
       max_height,
       wav.sample_rate,
       fft_size,
+      peak_heights,
+      peak_frames,
+      pos,
+      total,
+      rms,
     )
     println(display)
 
-    // Step 6: Sleep to control refresh rate (simulates real-time playback)
+    // Step 7: Sleep to control refresh rate
     @async.sleep(sleep_ms)
 
-    // Step 7: Advance to next chunk (with overlap)
+    // Step 8: Advance to next chunk (with overlap)
     pos += hop_size
   }
 
