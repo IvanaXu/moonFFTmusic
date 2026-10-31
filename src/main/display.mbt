@@ -339,24 +339,6 @@ fn bar_state(
 }
 
 ///|
-fn render_horizontal_bar(
-  sb : StringBuilder,
-  filled : Int32,
-  width : Int32,
-  fill_char : String,
-  empty_char : String,
-  transition_char : String?,
-) -> Unit {
-  for i in 0..<width {
-    match (i < filled, transition_char, i == filled) {
-      (true, _, _) => sb.write_string(fill_char)
-      (false, Some(tc), true) => sb.write_string(tc)
-      _ => sb.write_string(empty_char)
-    }
-  }
-}
-
-///|
 fn render_db_scale(sb : StringBuilder, row : Int32, max_height : Int32) -> Unit {
   let db_labels : Array[String] = [" 0dB", "-12", "-24", "-36", "-48"]
   let label_row = (row * (db_labels.length() - 1) / max_height).clamp(
@@ -534,7 +516,7 @@ fn render_spectrum(
   }
 
   // --- Beat-reactive brightness boost (shift color level up to 4) ---
-  let beat_boost = (beat_intensity * 4.0).to_int()
+  let beat_boost = (beat_intensity * 6.0).to_int()
 
   // --- Header ---
   let header_width = num_bars + 6
@@ -615,7 +597,8 @@ fn render_spectrum(
         BarCap => {
           let level = (ctx.row_contrib[row] +
             heights[bar].to_double() * ctx.height_factor +
-            beat_boost.to_double())
+            beat_boost.to_double() +
+            4.0)
             .to_int()
             .clamp(min=0, max=num_brightness_levels - 1)
           sb.write_string(ctx.color_table[bar][level])
@@ -632,7 +615,11 @@ fn render_spectrum(
         }
         PeakMarker => {
           sb.write_string("\u001b[1m")
-          sb.write_string(ctx.color_table[bar][26])
+          let peak_level = (peak_heights[bar].to_double() * ctx.height_factor +
+            20.0)
+            .to_int()
+            .clamp(min=10, max=num_brightness_levels - 1)
+          sb.write_string(ctx.color_table[bar][peak_level])
           sb.write_string("━")
           sb.write_string("\u001b[22m")
         }
@@ -679,7 +666,7 @@ fn render_spectrum(
   }
 
   // --- Frequency labels ---
-  sb.write_string("\u001b[90m     ")
+  sb.write_string("     ")
   let mut label_pos = 0
   for i in 0..<num_bars {
     let mut found_label = ""
@@ -694,11 +681,13 @@ fn render_spectrum(
         sb.write_string(" ")
         label_pos = label_pos + 1
       }
+      sb.write_string(ctx.color_table[i][18])
       sb.write_string(found_label)
+      sb.write_string("\u001b[0m")
       label_pos = i + found_label.length()
     }
   }
-  sb.write_string("\n\u001b[0m")
+  sb.write_string("\n")
 
   // --- Waveform strip ---
   render_waveform(sb, waveform, num_bars, beat_intensity)
@@ -720,25 +709,12 @@ fn render_spectrum(
   sb.write_string("\n\u001b[1;37mRMS: \u001b[0m[")
   for i in 0..<meter_width {
     let pct = i.to_double() / meter_width.to_double()
-    match pct {
-      p if p < 0.6 =>
-        if i < meter_filled {
-          sb.write_string("\u001b[32m█")
-        } else {
-          sb.write_string("\u001b[90m░")
-        }
-      p if p < 0.85 =>
-        if i < meter_filled {
-          sb.write_string("\u001b[33m█")
-        } else {
-          sb.write_string("\u001b[90m░")
-        }
-      _ =>
-        if i < meter_filled {
-          sb.write_string("\u001b[31m█")
-        } else {
-          sb.write_string("\u001b[90m░")
-        }
+    if i < meter_filled {
+      let hue = 120.0 * (1.0 - pct)
+      let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
+      sb.write_string("\u001b[38;2;\{r};\{g};\{b}m█")
+    } else {
+      sb.write_string("\u001b[90m░")
     }
   }
   sb.write_string("\u001b[0m] ")
@@ -754,15 +730,17 @@ fn render_spectrum(
   }
   let progress_filled = (progress_pct * num_bars.to_double()).to_int()
 
-  sb.write_string("\u001b[36m")
-  render_horizontal_bar(
-    sb,
-    progress_filled,
-    num_bars,
-    "║",
-    "░",
-    Some("▓"),
-  )
+  for i in 0..<num_bars {
+    if i < progress_filled {
+      sb.write_string(ctx.color_table[i][28])
+      sb.write_string("║")
+    } else if i == progress_filled {
+      sb.write_string(ctx.color_table[i][28])
+      sb.write_string("▓")
+    } else {
+      sb.write_string("\u001b[90m░")
+    }
+  }
   sb.write_string("\u001b[0m ")
   let pct_int = (progress_pct * 100.0).to_int()
   sb.write_string(
