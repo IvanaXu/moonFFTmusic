@@ -84,6 +84,9 @@ async fn main {
   let peak_heights = Array::make(num_bars, 0)
   let peak_frames = Array::make(num_bars, 0)
 
+  // --- Initialize temporal smoothing state ---
+  let prev_heights = Array::make(num_bars, 0)
+
   // --- Print initial info ---
   println("Loading WAV file: \{wav_path}")
   println(
@@ -129,6 +132,7 @@ async fn main {
       fft_size,
       peak_heights,
       peak_frames,
+      prev_heights,
       pos,
       total,
       rms,
