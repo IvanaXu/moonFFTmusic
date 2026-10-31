@@ -1,16 +1,17 @@
 // =============================================================================
 // WAV File Reader Module — Parse RIFF/WAVE PCM audio files
-// Supports 16-bit signed PCM, mono and stereo
+// Optimized with MoonBit features: derive(Debug), match patterns, test blocks
 // =============================================================================
 
 ///|
 /// Parsed WAV file data
+/// derive(Debug) auto-generates to_string for debugging
 struct WavData {
   sample_rate : Int32
   num_channels : Int32
   bits_per_sample : Int32
   samples : Array[Double] // normalized to [-1.0, 1.0]
-}
+} derive(Debug)
 
 ///|
 /// Read a little-endian unsigned 16-bit value from bytes at position
@@ -29,17 +30,17 @@ fn read_u32_le(data : Bytes, pos : Int32) -> Int32 {
 
 ///|
 /// Read a little-endian signed 16-bit value from bytes at position
+/// Uses match pattern for sign extension
 fn read_s16_le(data : Bytes, pos : Int32) -> Int32 {
   let val = data[pos].to_int() | (data[pos + 1].to_int() << 8)
-  if val >= 32768 {
-    val - 65536
-  } else {
-    val
+  match val {
+    v if v >= 32768 => v - 65536
+    _ => val
   }
 }
 
 ///|
-/// Check if 4 bytes at position match the given ASCII tag bytes
+/// Check if 4 bytes at position match the given ASCII tag
 fn is_tag(
   data : Bytes,
   pos : Int32,
@@ -52,6 +53,26 @@ fn is_tag(
   data[pos + 1].to_int() == b &&
   data[pos + 2].to_int() == c &&
   data[pos + 3].to_int() == d
+}
+
+///|
+/// Chunk type identified during WAV parsing — used with match pattern
+enum ChunkType {
+  FmtChunk   // "fmt " — format information
+  DataChunk  // "data" — audio data
+  OtherChunk // unknown chunk — skip
+}
+
+///|
+/// Identify chunk type using match pattern
+fn identify_chunk(data : Bytes, pos : Int32) -> ChunkType {
+  if is_tag(data, pos, 0x66, 0x6d, 0x74, 0x20) {
+    FmtChunk
+  } else if is_tag(data, pos, 0x64, 0x61, 0x74, 0x61) {
+    DataChunk
+  } else {
+    OtherChunk
+  }
 }
 
 ///|
@@ -80,7 +101,7 @@ fn read_wav(data : Bytes) -> WavData? {
     return None
   }
 
-  // Parse chunks starting after the RIFF header (offset 12)
+  // Parse chunks using match pattern on ChunkType enum
   let mut pos = 12
   let mut sample_rate = 44100
   let mut num_channels = 1
@@ -88,59 +109,128 @@ fn read_wav(data : Bytes) -> WavData? {
   let mut data_start = -1
   let mut data_size = 0
 
-  // Walk through chunks: each has 4-byte ID + 4-byte size + payload
   while pos + 8 <= len {
     let chunk_size = read_u32_le(data, pos + 4)
-    // "fmt " chunk: 0x66 0x6d 0x74 0x20
-    if is_tag(data, pos, 0x66, 0x6d, 0x74, 0x20) {
-      num_channels = read_u16_le(data, pos + 10)
-      sample_rate = read_u32_le(data, pos + 12)
-      bits_per_sample = read_u16_le(data, pos + 22)
+    // Use match pattern for chunk type dispatch
+    match identify_chunk(data, pos) {
+      FmtChunk => {
+        num_channels = read_u16_le(data, pos + 10)
+        sample_rate = read_u32_le(data, pos + 12)
+        bits_per_sample = read_u16_le(data, pos + 22)
+      }
+      DataChunk => {
+        data_start = pos + 8
+        data_size = chunk_size
+        break
+      }
+      OtherChunk => () // skip unknown chunks
     }
-    // "data" chunk: 0x64 0x61 0x74 0x61
-    if is_tag(data, pos, 0x64, 0x61, 0x74, 0x61) {
-      data_start = pos + 8
-      data_size = chunk_size
-      break
-    }
-    // Advance to next chunk (chunks are word-aligned, padded to even size)
+    // Advance to next chunk (word-aligned, padded to even size)
     pos += 8 + chunk_size
     if chunk_size % 2 == 1 {
       pos += 1
     }
   }
 
-  // Validate: must have data chunk and 16-bit PCM format
+  // Validate using guard pattern
   if data_start < 0 || bits_per_sample != 16 {
     return None
   }
 
-  // Calculate number of audio frames (samples per channel)
-  let bytes_per_frame = 2 * num_channels // 16-bit = 2 bytes per sample
+  // Calculate number of audio frames
+  let bytes_per_frame = 2 * num_channels
   let total_samples = data_size / bytes_per_frame
   let samples = Array::make(total_samples, 0.0)
 
-  // Read and normalize PCM samples to [-1.0, 1.0]
+  // Read and normalize PCM samples — match on channel count
   for i in 0..<total_samples {
     let byte_pos = data_start + i * bytes_per_frame
     if byte_pos + 1 >= len {
       break
     }
-    if num_channels == 1 {
-      // Mono: single 16-bit sample
-      let raw = read_s16_le(data, byte_pos)
-      samples[i] = raw.to_double() / 32768.0
-    } else {
-      // Stereo (or more): average first two channels
-      let left = read_s16_le(data, byte_pos)
-      if byte_pos + 3 < len {
-        let right = read_s16_le(data, byte_pos + 2)
-        samples[i] = (left.to_double() + right.to_double()) / 65536.0
-      } else {
-        samples[i] = left.to_double() / 32768.0
+    match num_channels {
+      1 => {
+        // Mono: single 16-bit sample
+        samples[i] = read_s16_le(data, byte_pos).to_double() / 32768.0
+      }
+      _ => {
+        // Stereo+: average first two channels
+        let left = read_s16_le(data, byte_pos)
+        match byte_pos + 3 < len {
+          true => {
+            let right = read_s16_le(data, byte_pos + 2)
+            samples[i] = (left.to_double() + right.to_double()) / 65536.0
+          }
+          false => {
+            samples[i] = left.to_double() / 32768.0
+          }
+        }
       }
     }
   }
 
   Some(WavData::{ sample_rate, num_channels, bits_per_sample, samples, })
+}
+
+// =============================================================================
+// Inline Tests
+// =============================================================================
+
+///|
+test "read_u16_le reads little-endian 16-bit" {
+  // Bytes: 0x34 0x12 → 0x1234 = 4660
+  let data = Bytes::from_array([0x34, 0x12, 0x00, 0x00])
+  assert_eq(read_u16_le(data, 0), 0x1234)
+}
+
+///|
+test "read_u32_le reads little-endian 32-bit" {
+  // Bytes: 0x78 0x56 0x34 0x12 → 0x12345678
+  let data = Bytes::from_array([0x78, 0x56, 0x34, 0x12])
+  assert_eq(read_u32_le(data, 0), 0x12345678)
+}
+
+///|
+test "read_s16_le handles negative values" {
+  // Bytes: 0x00 0x80 → 0x8000 = -32768 (most negative 16-bit)
+  let data = Bytes::from_array([0x00, 0x80, 0x00, 0x00])
+  assert_eq(read_s16_le(data, 0), -32768)
+}
+
+///|
+test "read_s16_le handles positive values" {
+  // Bytes: 0xFF 0x7F → 0x7FFF = 32767 (most positive 16-bit)
+  let data = Bytes::from_array([0xFF, 0x7F, 0x00, 0x00])
+  assert_eq(read_s16_le(data, 0), 32767)
+}
+
+///|
+test "is_tag matches correct bytes" {
+  let data = Bytes::from_array([0x52, 0x49, 0x46, 0x46]) // "RIFF"
+  assert_true(is_tag(data, 0, 0x52, 0x49, 0x46, 0x46))
+}
+
+///|
+test "is_tag rejects wrong bytes" {
+  let data = Bytes::from_array([0x00, 0x49, 0x46, 0x46])
+  assert_false(is_tag(data, 0, 0x52, 0x49, 0x46, 0x46))
+}
+
+///|
+test "read_wav rejects too-short data" {
+  let data = Bytes::from_array([0x52, 0x49, 0x46, 0x46])
+  assert_true(read_wav(data) is None)
+}
+
+///|
+test "read_wav rejects non-RIFF data" {
+  let data = Bytes::from_array([
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  ])
+  assert_true(read_wav(data) is None)
 }
