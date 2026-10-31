@@ -51,6 +51,8 @@ struct DisplayContext {
   height_factor : Double
   sample_rate : Int32
   fft_size : Int32
+  separator_colors : Array[String]
+  meter_colors : Array[String]
 }
 
 ///|
@@ -252,6 +254,24 @@ fn create_display_context(
   })
   let max_levels = max_height * sub_res
   let height_factor = 14.0 / max_levels.to_double()
+  // Precompute separator colors (gradient at base lightness 0.3)
+  let sep_count = num_bars + 6
+  let separator_colors = Array::make(sep_count, "")
+  for i in 0..<sep_count {
+    let ratio = i.to_double() / (sep_count - 1).to_double()
+    let hue = 260.0 * (1.0 - ratio)
+    let (r, g, b) = hsl_to_rgb(hue, 0.6, 0.3)
+    separator_colors[i] = "\u001b[38;2;\{r};\{g};\{b}m"
+  }
+  // Precompute RMS meter colors (green→yellow→red gradient, 20 levels)
+  let meter_width = 20
+  let meter_colors = Array::make(meter_width, "")
+  for i in 0..<meter_width {
+    let pct = i.to_double() / meter_width.to_double()
+    let hue = 120.0 * (1.0 - pct)
+    let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
+    meter_colors[i] = "\u001b[38;2;\{r};\{g};\{b}m"
+  }
   DisplayContext::{
     num_bars,
     max_height,
@@ -268,6 +288,8 @@ fn create_display_context(
     height_factor,
     sample_rate,
     fft_size,
+    separator_colors,
+    meter_colors,
   }
 }
 
@@ -558,13 +580,10 @@ fn render_spectrum(
   }
   sb.write_string("╝\n\u001b[0m")
 
-  // --- Separator with true-color gradient + beat pulse ---
-  let sep_light = 0.3 + beat_intensity * 0.15
+  // --- Separator with precomputed gradient colors ---
   for i in 0..<(num_bars + 6) {
-    let ratio = i.to_double() / (num_bars + 5).to_double()
-    let hue = 260.0 * (1.0 - ratio)
-    let (r, g, b) = hsl_to_rgb(hue, 0.6, sep_light)
-    sb.write_string("\u001b[38;2;\{r};\{g};\{b}m─")
+    sb.write_string(ctx.separator_colors.unsafe_get(i))
+    sb.write_string("─")
   }
   sb.write_string("\u001b[0m\n")
 
@@ -714,16 +733,14 @@ fn render_spectrum(
   } else {
     0.0
   }
-  let meter_width = 20
-  let meter_filled = (rms_pct * meter_width.to_double()).to_int()
+  let meter_filled = (rms_pct * 20.0).to_int()
 
+  let meter_width = 20
   sb.write_string("\n\u001b[1;37mRMS: \u001b[0m[")
   for i in 0..<meter_width {
-    let pct = i.to_double() / meter_width.to_double()
     if i < meter_filled {
-      let hue = 120.0 * (1.0 - pct)
-      let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
-      sb.write_string("\u001b[38;2;\{r};\{g};\{b}m█")
+      sb.write_string(ctx.meter_colors.unsafe_get(i))
+      sb.write_string("█")
     } else {
       sb.write_string("\u001b[90m░")
     }

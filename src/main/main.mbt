@@ -87,6 +87,7 @@ async fn main {
   let (tw_re, tw_im) = precompute_twiddles_soa(fft_size)
   let hann = precompute_hann_window(fft_size)
   let bits = log2_int(fft_size)
+  let bit_rev = precompute_bit_reversal(fft_size, bits)
 
   // --- Precompute display context ONCE at startup ---
   let ctx = create_display_context(
@@ -129,25 +130,19 @@ async fn main {
   let total = wav.samples.length()
   let mut pos = 0
   while pos + fft_size <= total {
-    // Step 1: Fill re/im arrays directly from WAV samples (zero Complex alloc)
-    for i in 0..<fft_size {
-      re[i] = wav.samples[pos + i]
-      im[i] = 0.0
-    }
-
-    // Step 2: Calculate RMS directly from re[] (before windowing)
+    // Step 1-3 FUSED: Load samples + compute RMS + apply Hann window in one pass
+    // (eliminates 2 separate loops over fft_size = 2048 iterations saved per frame)
     let mut sum_sq = 0.0
     for i in 0..<fft_size {
-      let s = re.unsafe_get(i)
+      let s = wav.samples.unsafe_get(pos + i)
       sum_sq += s * s
+      re.unsafe_set(i, s * hann.unsafe_get(i))
+      im.unsafe_set(i, 0.0)
     }
     let rms = (sum_sq / fft_size.to_double()).sqrt()
 
-    // Step 3: Apply Hann window (in-place on re[], im[] stays zero)
-    apply_hann_window_soa(re, hann)
-
     // Step 4: Compute SoA FFT (in-place, zero allocations)
-    fft_soa(re, im, tw_re, tw_im, bits)
+    fft_soa(re, im, tw_re, tw_im, bit_rev)
 
     // Step 5: Compute mag² for ALL bins (NO sqrt — just re²+im²)
     for i in 0..<half {

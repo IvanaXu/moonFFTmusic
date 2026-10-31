@@ -166,19 +166,34 @@ fn apply_hann_window_soa(re : Array[Double], hann : Array[Double]) -> Unit {
 }
 
 ///|
+fn precompute_bit_reversal(n : Int32, bits : Int32) -> Array[Int32] {
+  let table = Array::make(n, 0)
+  for i in 0..<n {
+    let mut result : Int32 = 0
+    let mut x = i
+    for _ in 0..<bits {
+      result = (result << 1) | (x & 1)
+      x = x >> 1
+    }
+    table[i] = result
+  }
+  table
+}
+
+///|
 fn fft_soa(
   re : Array[Double],
   im : Array[Double],
   tw_re : Array[Double],
   tw_im : Array[Double],
-  bits : Int32,
+  bit_rev : Array[Int32],
 ) -> Unit {
   let n = re.length()
   if n <= 1 {
     return
   }
   for i in 0..<n {
-    let j = bit_reverse(i, bits)
+    let j = bit_rev.unsafe_get(i)
     if j > i {
       let tr = re.unsafe_get(i)
       let ti = im.unsafe_get(i)
