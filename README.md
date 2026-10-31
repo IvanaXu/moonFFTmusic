@@ -9,22 +9,28 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 
 ## Features
 
-### Audio Engine
+### Audio Engine (CPU-Optimized)
 
 - **WAV File Reader**: Parses RIFF/WAVE headers and reads 16-bit signed PCM audio
   (mono and stereo). Samples are normalized to [-1.0, 1.0].
-- **FFT Engine**: Iterative radix-2 Cooley-Tukey FFT with precomputed twiddle
-  factors and in-place butterfly operations. Uses `unsafe_get`/`unsafe_set` for
-  hot-loop performance.
-- **Hann Window**: Applied before FFT to reduce spectral leakage, using
-  `Array::mapi_in_place` for efficient in-place computation.
+- **SoA FFT Engine**: Iterative radix-2 Cooley-Tukey FFT using Structure of Arrays
+  (separate `Array[Double]` for real/imaginary parts). The butterfly hot loop uses
+  inline double arithmetic with `unsafe_get`/`unsafe_set` — **zero object allocations**
+  per frame (vs ~15,000 allocations/frame in the original Complex-based approach).
+- **Single Twiddle Table**: Twiddle factors are precomputed once at startup as a
+  single table of size N/2. All FFT stages reuse this table via strided indexing
+  (`twiddle(j) = tw[j * stride]`), eliminating per-stage trigonometric recomputation.
+- **Precomputed Hann Window**: Window coefficients are computed once at startup and
+  applied via direct array multiplication — no per-frame `cos` calls.
+- **Pre-allocated FFT Buffers**: `re[]` and `im[]` arrays are allocated once and
+  reused across all frames — zero per-frame array allocations.
 
-### Visual Display (16 enhancements)
+### Visual Display (18 enhancements)
 
 | # | Feature | Description |
 |---|---------|-------------|
 | 1 | Attack/release envelope | Fast rise (0.7), slow fall (0.15) — natural amplitude decay |
-| 2 | Spatial smoothing | 3-tap blur `[0.2, 0.6, 0.2]` across neighboring bars |
+| 2 | Spatial smoothing | In-place 3-tap blur `[0.2, 0.6, 0.2]` with rolling buffer (no temp array) |
 | 3 | Row-level brightness gradient | 3D glow effect — top of bars brighter, bottom dimmer |
 | 4 | Left-side dB scale | Professional meter labels: 0dB, -12, -24, -36, -48 |
 | 5 | Segmented RMS meter | Green (<60%) → yellow (<85%) → red zones with dB readout |
@@ -38,7 +44,22 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | 13 | Peak frequency marker | Yellow `▼` arrow above dominant frequency bar |
 | 14 | Vertical frequency grid | Faint `╎` at label positions (50Hz – 10kHz) |
 | 15 | Magnitude-based color | Brightness = 50% row position + 50% magnitude ratio |
-| 16 | 26-color rainbow gradient | Blue → cyan → green → yellow → orange → red → magenta |
+| 16 | **True-color 24-bit RGB gradient** | Smooth HSL-based rainbow (blue→cyan→green→yellow→red) using `\u001b[38;2;R;G;Bm`, precomputed per-bar |
+| 17 | **Beat detection with pulse glow** | RMS energy history tracking; border flashes warm orange on detected beats, ♫ indicator in header |
+| 18 | **Waveform strip** | Time-domain signal display at bottom showing the actual audio waveform shape |
+
+### Performance Optimizations Summary
+
+| Optimization | Before | After | Impact |
+|---|---|---|---|
+| FFT data layout | `Array[Complex]` (3 allocs/butterfly) | `Array[Double]` re/im (0 allocs) | ~15,000 fewer allocs/frame |
+| Twiddle factors | Recomputed per stage (log₂N times) | Single table, strided lookup | Eliminates N/2 `cos`/`sin` calls/frame |
+| Hann window | Recomputed per frame | Precomputed once at startup | Eliminates N `cos` calls/frame |
+| Bin mapping | `log_freq_bin()` per bar per frame | Precomputed `bin_map[]` array | Eliminates 60 `pow`/`log2` calls/frame |
+| Grid detection | Linear search per bar per row | Precomputed `is_grid[]` boolean array | O(1) lookup vs O(k) search |
+| Frequency labels | O(n²) string concatenation | StringBuilder | Linear-time label rendering |
+| Spatial smoothing | Temp array allocation per frame | In-place rolling buffer | Zero per-frame array allocs |
+| FFT buffers | Allocated per frame | Pre-allocated, reused | Zero per-frame array allocs |
 
 ## How to Run
 
@@ -120,7 +141,7 @@ Smaller sizes give better time resolution but coarser frequency bins.
 ```
 ╔══════════════════════════════════════════════════════════════════╗
 ║ 🎵 MoonFFTmusic — Real-time Spectrum Analyzer                    ║
-║ Rate: 44100Hz | FFT: 1024 | Bars: 60 | Peak: 473Hz (A#4+) | 0:0.2 ║
+║ Rate: 44100Hz | FFT: 1024 | Bars: 60 | Peak: 473Hz (A#4+) ♫ | 0:0.2 ║
 ╚══════════════════════════════════════════════════════════════════╝
 ──────────────────────────────────────────────────────────────────
      ╎                            ▼     ╎        ╎      ╎
@@ -134,12 +155,15 @@ Smaller sizes give better time resolution but coarser frequency bins.
      ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀
      ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀
       50Hz   100Hz 200Hz    500Hz  1kHz  2kHz     5kHz   10kHz
+  WV ─▔──▔─▁─▔──▁▁─▔───▔▁─▔──▁▁▔▔───▔─▁─▔──▁▁──▔──▁─▔─▁▔──
 
 RMS: [████████████████░░░░] -6.0 dB
 ║║║║║║║║║║║║║║║║║║║║║║║║║║▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 44%  0:0.2 / 0:0.5
 ```
 
-Press `Ctrl+C` to stop.
+Bars use smooth 24-bit true-color RGB gradient (blue → cyan → green → yellow → red).
+The header border glows warm orange on detected beats. The `WV` line shows the
+time-domain waveform. Press `Ctrl+C` to stop.
 
 ## MoonBit Language Features
 
@@ -148,22 +172,24 @@ This project leverages MoonBit-specific features for performance and safety:
 | Feature | Usage |
 |---------|-------|
 | `derive(Debug)` | Auto-generated debug output for `Complex` and `WavData` structs |
-| `Array::unsafe_get`/`unsafe_set` | Bypass bounds check in FFT butterfly hot loop |
-| `Array::mapi_in_place` | In-place Hann window application |
-| `Array::makei` | Functional array construction for FFT input and magnitude extraction |
-| `Array::fold` | Functional RMS calculation |
-| `StringBuilder` | Efficient string building for terminal output |
+| `Array::unsafe_get`/`unsafe_set` | Bypass bounds check in FFT butterfly hot loop (SoA) |
+| `Array::mapi_in_place` | In-place Hann window application (Complex path) |
+| `Array::makei` | Functional array construction for precomputed tables |
+| `StringBuilder` | Efficient string building for all terminal output |
 | `Double::clamp` / `Int32::clamp` | Safe value clamping with labeled arguments |
-| `match` patterns | Chunk type dispatch, arg parsing, bar render states |
+| `match` patterns | Chunk type dispatch, arg parsing, bar render states, HSL→RGB |
 | `guard` patterns | Early return on file not found / parse failure |
-| `test` blocks | 21 inline tests for FFT correctness, WAV parsing, arg parsing |
-| `enum` + `match` | `ChunkType` enum for WAV chunk identification |
-| Bit tricks | `n & (n-1)` for power-of-2 check |
+| `test` blocks | 25 inline tests for FFT correctness, SoA FFT, WAV parsing, args |
+| `enum` + `match` | `ChunkType`/`BarState` enums for dispatch |
+| `mut` struct fields | Mutable `BeatDetector` state (history_idx, beat_intensity) |
+| Bit tricks | `n & (n-1)` for power-of-2 check, bit-reversal permutation |
+| SoA pattern | Separate `Array[Double]` re/im for zero-alloc FFT |
+| Precomputed tables | Twiddle factors, Hann window, bin mapping, bar colors — all computed once at startup |
 
 ## Testing
 
 ```bash
-# Run all 21 inline tests
+# Run all 25 inline tests
 moon test --target native
 
 # Type check with no warnings
@@ -178,7 +204,7 @@ moon fmt && git diff --exit-code
 GitHub Actions CI runs on every push and pull request:
 
 1. **Check & Format** — `moon check --deny-warn` + `moon fmt` diff check
-2. **Build & Test** — `moon build` + `moon test` (21 inline tests)
+2. **Build & Test** — `moon build` + `moon test` (25 inline tests)
 3. **Integration** — Generate WAV files, run visualizer, verify output, test
    multiple FFT sizes, verify error handling
 
@@ -191,10 +217,10 @@ moonFFTmusic/
 ├── .github/workflows/ci.yml   # GitHub Actions CI
 ├── src/main/
 │   ├── moon.pkg               # Package imports
-│   ├── fft.mbt               # FFT engine + Complex struct + tests
+│   ├── fft.mbt               # FFT engine (Complex + SoA) + tests
 │   ├── wav.mbt               # WAV parser + tests
-│   ├── display.mbt           # ANSI spectrum renderer (16 visual effects)
-│   └── main.mbt              # Entry point + arg parsing + tests
+│   ├── display.mbt           # ANSI renderer (18 effects, true-color, beat detection)
+│   └── main.mbt              # Entry point + SoA FFT loop + arg parsing + tests
 ├── gen_wav.py                 # WAV file generator
 ├── run.sh                     # Build & run script
 ├── moon.mod                   # Module definition
