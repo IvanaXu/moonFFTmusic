@@ -1,12 +1,16 @@
 // =============================================================================
 // Terminal Display Module — Beautiful ANSI spectrum visualizer
 // Visual enhancements:
-//   1. Temporal smoothing — bars interpolate between frames
+//   1. Attack/release envelope — fast rise, slow fall (natural decay)
 //   2. Row-level brightness gradient — 3D glow effect per bar
 //   3. Left-side dB scale — professional meter look
 //   4. Segmented RMS meter — green/yellow/red zones
-//   5. Peak markers with gravity decay + bold
+//   5. Peak markers with gravity decay + bold ━
 //   6. Separator line between header and spectrum
+//   7. Musical note detection for dominant frequency
+//   8. Bar grouping with subtle gaps every 3 bars
+//   9. Bottom glow reflection — dim mirror of spectrum
+//  10. Dashed reference line at -12dB
 // =============================================================================
 
 ///|
@@ -25,6 +29,11 @@ let ansi_clear : String = "\u001b[2J\u001b[H"
 
 ///|
 let ansi_reset : String = "\u001b[0m"
+
+///|
+let note_names : Array[String] = [
+  "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+]
 
 ///|
 enum BarState {
@@ -93,6 +102,13 @@ fn gradient_color_row(
 }
 
 ///|
+fn gradient_color_glow(bar : Int32, num_bars : Int32) -> String {
+  let idx = palette_index(bar, num_bars)
+  let color = dim_color_code(rainbow_palette[idx])
+  "\u001b[38;5;\{color}m"
+}
+
+///|
 fn log_freq_bin(bar : Int32, num_bars : Int32, half_fft : Int32) -> Int32 {
   if half_fft <= 1 {
     return 0
@@ -135,6 +151,23 @@ fn format_freq(hz : Int32) -> String {
     k if k >= 1000 => "\{k / 1000}kHz"
     _ => "\{hz}Hz"
   }
+}
+
+///|
+fn freq_to_note(hz : Int32) -> String {
+  if hz <= 0 {
+    return "---"
+  }
+  let midi = 69.0 + 12.0 * @math.log2(hz.to_double() / 440.0)
+  let midi_int = midi.round().to_int()
+  if midi_int < 0 || midi_int > 127 {
+    return "---"
+  }
+  let note_idx = midi_int % 12
+  let octave = midi_int / 12 - 1
+  let cents = ((midi - midi_int.to_double()) * 100.0).to_int()
+  let cents_str = if cents > 5 { "+" } else if cents < -5 { "-" } else { "" }
+  "\{note_names[note_idx]}\{octave}\{cents_str}"
 }
 
 ///|
@@ -201,6 +234,12 @@ fn render_db_scale(sb : StringBuilder, row : Int32, max_height : Int32) -> Unit 
 }
 
 ///|
+fn is_ref_line(row : Int32, max_height : Int32) -> Bool {
+  let expected_row = 1 * max_height / 4
+  row == expected_row
+}
+
+///|
 fn render_spectrum(
   magnitudes : Array[Double],
   num_bars : Int32,
@@ -237,11 +276,15 @@ fn render_spectrum(
     }
   }
 
-  // --- Temporal smoothing: interpolate between previous and current ---
+  // --- Attack/release envelope: fast rise, slow fall ---
   for bar in 0..<num_bars {
     let prev = prev_heights[bar].to_double()
     let curr = heights[bar].to_double()
-    let smoothed = prev * 0.6 + curr * 0.4
+    let smoothed = if curr >= prev {
+      prev * 0.3 + curr * 0.7
+    } else {
+      prev * 0.85 + curr * 0.15
+    }
     heights[bar] = smoothed.to_int()
     prev_heights[bar] = heights[bar]
   }
@@ -263,13 +306,14 @@ fn render_spectrum(
     }
   }
 
-  // --- Dominant frequency ---
+  // --- Dominant frequency + note name ---
   let dominant_freq = dominant_bin * sample_rate / fft_size
+  let note_name = freq_to_note(dominant_freq)
 
   // --- Box-drawing header ---
   let header_width = num_bars + 6
   let title = "🎵 MoonFFTmusic — Real-time Spectrum Analyzer"
-  let info_line = "Rate: \{sample_rate}Hz | FFT: \{fft_size} | Bars: \{num_bars} | Peak: \{format_freq(dominant_freq)} | Time: \{format_time(current_pos, sample_rate)}"
+  let info_line = "Rate: \{sample_rate}Hz | FFT: \{fft_size} | Bars: \{num_bars} | Peak: \{format_freq(dominant_freq)} (\{note_name}) | \{format_time(current_pos, sample_rate)}"
 
   sb.write_string("\u001b[1;36m╔")
   for _ in 0..<header_width {
@@ -309,12 +353,21 @@ fn render_spectrum(
   }
   sb.write_string("\u001b[0m\n")
 
-  // --- Render bars with dB scale and row-level brightness ---
+  // --- Render bars with dB scale, ref line, and row-level brightness ---
   for row in 0..<max_height {
     render_db_scale(sb, row, max_height)
     let level_top = (max_height - row) * sub_res
     let level_bottom = (max_height - row - 1) * sub_res
+    let ref_line = is_ref_line(row, max_height)
     for bar in 0..<num_bars {
+      if bar % 3 == 2 && bar < num_bars - 1 {
+        if ref_line {
+          sb.write_string("\u001b[90m·\u001b[0m")
+        } else {
+          sb.write_string(" ")
+        }
+        continue
+      }
       match
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
@@ -328,10 +381,41 @@ fn render_spectrum(
         PeakMarker => {
           sb.write_string("\u001b[1m")
           sb.write_string(gradient_color(bar, num_bars))
-          sb.write_string("▔")
+          sb.write_string("━")
           sb.write_string("\u001b[22m")
         }
-        Empty => sb.write_string(" ")
+        Empty =>
+          if ref_line {
+            sb.write_string("\u001b[90m┄\u001b[0m")
+          } else {
+            sb.write_string(" ")
+          }
+      }
+    }
+    sb.write_string(ansi_reset)
+    sb.write_string("\n")
+  }
+
+  // --- Bottom glow reflection (3 rows, dimming) ---
+  for glow_row in 0..<3 {
+    sb.write_string("\u001b[90m     \u001b[0m")
+    let glow_factor = match glow_row {
+      0 => 0.35
+      1 => 0.2
+      _ => 0.1
+    }
+    for bar in 0..<num_bars {
+      if bar % 3 == 2 && bar < num_bars - 1 {
+        sb.write_string(" ")
+        continue
+      }
+      let reflected_height = (heights[bar].to_double() * glow_factor).to_int()
+      let glow_level = (glow_row + 1) * sub_res
+      if reflected_height >= glow_level {
+        sb.write_string(gradient_color_glow(bar, num_bars))
+        sb.write_string("▀")
+      } else {
+        sb.write_string(" ")
       }
     }
     sb.write_string(ansi_reset)
