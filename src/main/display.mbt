@@ -7,8 +7,8 @@
 ///|
 /// 256-color rainbow palette (blue → cyan → green → yellow → orange → red → magenta)
 let rainbow_palette : Array[Int32] = [
-  21, 27, 33, 39, 45, 51, 50, 49, 48, 47, 46, 82, 118, 154, 190, 226, 215, 214,
-  213, 208, 203, 204, 198, 199, 200, 201,
+  21, 27, 33, 39, 45, 51, 50, 49, 48, 47, 46, 82, 118, 154, 190, 226, 215, 214, 213,
+  208, 203, 204, 198, 199, 200, 201,
 ]
 
 ///|
@@ -28,10 +28,10 @@ let ansi_reset : String = "\u001b[0m"
 ///|
 /// Bar rendering state — used with match pattern for clean rendering logic
 enum BarState {
-  FullBlock       // bar reaches this row: draw █
-  PartialBlock(Int32)  // sub-row fraction: draw ▁▂▃▄▅▆▇
-  PeakMarker      // peak hold marker: draw ▔
-  Empty           // nothing at this position
+  FullBlock // bar reaches this row: draw █
+  PartialBlock(Int32) // sub-row fraction: draw ▁▂▃▄▅▆▇
+  PeakMarker // peak hold marker: draw ▔
+  Empty // nothing at this position
 }
 
 ///|
@@ -56,7 +56,7 @@ fn gradient_color_dim(bar : Int32, num_bars : Int32) -> String {
   let dim_color = if color >= 16 && color <= 231 {
     let offset = color - 16
     let r = offset / 36
-    let g = (offset % 36) / 6
+    let g = offset % 36 / 6
     let b = offset % 6
     16 + (r.max(1) - 1) * 36 + (g.max(1) - 1) * 6 + (b.max(1) - 1)
   } else {
@@ -79,7 +79,12 @@ fn log_freq_bin(bar : Int32, num_bars : Int32, half_fft : Int32) -> Int32 {
 
 ///|
 /// Inverse log mapping: given a frequency in Hz, find which bar it corresponds to
-fn freq_to_bar(freq : Double, num_bars : Int32, half_fft : Int32, sample_rate : Int32) -> Int32 {
+fn freq_to_bar(
+  freq : Double,
+  num_bars : Int32,
+  half_fft : Int32,
+  sample_rate : Int32,
+) -> Int32 {
   if freq <= 0.0 || half_fft <= 1 {
     return 0
   }
@@ -96,8 +101,8 @@ fn freq_to_bar(freq : Double, num_bars : Int32, half_fft : Int32, sample_rate : 
 fn format_time(samples : Int32, sample_rate : Int32) -> String {
   let total_ms = samples * 1000 / sample_rate
   let minutes = total_ms / 60000
-  let seconds = (total_ms % 60000) / 1000
-  let tenths = (total_ms % 1000) / 100
+  let seconds = total_ms % 60000 / 1000
+  let tenths = total_ms % 1000 / 100
   "\{minutes}:\{seconds}.\{tenths}"
 }
 
@@ -123,7 +128,12 @@ fn scale_magnitude(mag : Double) -> Double {
 
 ///|
 /// Determine bar rendering state for a given row using match-friendly logic
-fn bar_state(height : Int32, peak : Int32, level_top : Int32, level_bottom : Int32) -> BarState {
+fn bar_state(
+  height : Int32,
+  peak : Int32,
+  level_top : Int32,
+  level_bottom : Int32,
+) -> BarState {
   if height >= level_top {
     FullBlock
   } else if height > level_bottom {
@@ -211,9 +221,7 @@ fn render_spectrum(
         }
         peak_frames[bar] = 0
       }
-      (false, false) => {
-        peak_frames[bar] = peak_frames[bar] + 1
-      }
+      (false, false) => peak_frames[bar] = peak_frames[bar] + 1
     }
   }
 
@@ -232,13 +240,19 @@ fn render_spectrum(
   sb.write_string("╗\n║ ")
   sb.write_string(title)
   // Pad title to fit box
-  let title_pad = (header_width - title.length() - 2).clamp(min=0, max=header_width)
+  let title_pad = (header_width - title.length() - 2).clamp(
+    min=0,
+    max=header_width,
+  )
   for _ in 0..<title_pad {
     sb.write_string(" ")
   }
   sb.write_string(" ║\n║ ")
   sb.write_string(info_line)
-  let info_pad = (header_width - info_line.length() - 2).clamp(min=0, max=header_width)
+  let info_pad = (header_width - info_line.length() - 2).clamp(
+    min=0,
+    max=header_width,
+  )
   for _ in 0..<info_pad {
     sb.write_string(" ")
   }
@@ -253,7 +267,8 @@ fn render_spectrum(
     let level_top = (max_height - row) * sub_res
     let level_bottom = (max_height - row - 1) * sub_res
     for bar in 0..<num_bars {
-      match bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
+      match
+        bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
           sb.write_string(gradient_color(bar, num_bars))
           sb.write_string("█")
@@ -266,9 +281,7 @@ fn render_spectrum(
           sb.write_string(gradient_color_dim(bar, num_bars))
           sb.write_string("▔")
         }
-        Empty => {
-          sb.write_string(" ")
-        }
+        Empty => sb.write_string(" ")
       }
     }
     sb.write_string(ansi_reset)
@@ -338,7 +351,14 @@ fn render_spectrum(
   let progress_filled = (progress_pct * num_bars.to_double()).to_int()
 
   sb.write_string("\u001b[36m")
-  render_horizontal_bar(sb, progress_filled, num_bars, "║", "░", Some("▓"))
+  render_horizontal_bar(
+    sb,
+    progress_filled,
+    num_bars,
+    "║",
+    "░",
+    Some("▓"),
+  )
   sb.write_string("\u001b[0m ")
   let pct_int = (progress_pct * 100.0).to_int()
   sb.write_string(

@@ -16,9 +16,7 @@ fn is_power_of_two(n : Int32) -> Bool {
 /// Uses match pattern for clean argument handling
 fn parse_fft_size(arg : String?) -> Int32 {
   match arg {
-    Some(s) => @string.parse_int(s) catch {
-      _ => 1024
-    }
+    Some(s) => @string.parse_int(s) catch { _ => 1024 }
     None => 1024
   }
 }
@@ -120,9 +118,7 @@ async fn main {
     fft(chunk)
 
     // Step 5: Extract magnitudes using Array::mapi (functional style)
-    let magnitudes = Array::makei(half, fn(i) {
-      chunk[i].mag()
-    })
+    let magnitudes = Array::makei(half, fn(i) { chunk[i].mag() })
 
     // Step 6: Render and display
     let display = render_spectrum(

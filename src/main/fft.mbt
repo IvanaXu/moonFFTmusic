@@ -237,7 +237,9 @@ test "FFT of pure sine wave produces two peaks" {
   let freq = 2 // 2 cycles in N samples
   let data = Array::makei(n, fn(i) {
     Complex::{
-      re: @math.sin(2.0 * @math.PI * freq.to_double() * i.to_double() / n.to_double()),
+      re: @math.sin(
+        2.0 * @math.PI * freq.to_double() * i.to_double() / n.to_double(),
+      ),
       im: 0.0,
     }
   })
