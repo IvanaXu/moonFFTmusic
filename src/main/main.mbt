@@ -160,6 +160,7 @@ async fn main {
   // Precompute total time string (invariant across frames)
   let total_time_str = format_time(total, wav.sample_rate)
   let mut pos = 0
+  let mut frame_count = 0
   // Sticky dominant bar — resists jitter when multiple bars have similar magnitude.
   // Only switch when the new bar is >20% stronger or >3 positions away.
   let mut last_dom_bar = 0
@@ -243,6 +244,8 @@ async fn main {
     }
     peak_trail.push(dom_bar)
 
+    // Rainbow hue rotation: shift hue by 3 degrees per frame
+    rotate_hue(ctx, frame_count.to_double() * 3.0)
     let display = render_spectrum(
       magnitudes, ctx, peak_heights, peak_frames, prev_heights, render_prev, heights,
       pos, total, rms, beat_intensity, waveform, total_time_str, sparkline, peak_trail,
@@ -255,6 +258,7 @@ async fn main {
 
     // Step 11: Advance with overlap
     pos += hop_size
+    frame_count += 1
   }
 
   // --- Playback complete ---

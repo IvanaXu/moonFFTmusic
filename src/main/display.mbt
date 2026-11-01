@@ -54,6 +54,9 @@ struct DisplayContext {
   db_scale_labels : Array[String]
   waveform_colors : Array[String]
   bar_offsets : Array[Int32]
+  bar_hues : Array[Double]
+  bar_sats : Array[Double]
+  bar_lights : Array[Double]
 }
 
 ///|
@@ -340,10 +343,20 @@ fn hsl_to_rgb(h : Double, s : Double, l : Double) -> (Int32, Int32, Int32) {
 ///|
 fn precompute_bar_colors(
   num_bars : Int32,
-) -> (Array[Int32], Array[Int32], Array[Int32]) {
+) -> (
+  Array[Int32],
+  Array[Int32],
+  Array[Int32],
+  Array[Double],
+  Array[Double],
+  Array[Double],
+) {
   let bar_r = Array::make(num_bars, 0)
   let bar_g = Array::make(num_bars, 0)
   let bar_b = Array::make(num_bars, 0)
+  let bar_hues = Array::make(num_bars, 0.0)
+  let bar_sats = Array::make(num_bars, 0.0)
+  let bar_lights = Array::make(num_bars, 0.0)
   for bar in 0..<num_bars {
     let ratio = bar.to_double() / (num_bars - 1).to_double()
     // Hue: 260 (indigo) -> 0 (red), wide vibrant spectrum
@@ -356,8 +369,11 @@ fn precompute_bar_colors(
     bar_r[bar] = r
     bar_g[bar] = g
     bar_b[bar] = b
+    bar_hues[bar] = hue
+    bar_sats[bar] = sat
+    bar_lights[bar] = light
   }
-  (bar_r, bar_g, bar_b)
+  (bar_r, bar_g, bar_b, bar_hues, bar_sats, bar_lights)
 }
 
 ///|
@@ -388,6 +404,32 @@ fn precompute_color_table(
     }
   }
   table
+}
+
+///|
+/// Recompute color table in-place with a hue offset for rainbow animation.
+/// Called once per frame — 60 hsl_to_rgb + 1920 string ops, ~0.05ms.
+fn rotate_hue(ctx : DisplayContext, hue_offset : Double) -> Unit {
+  let num_bars = ctx.num_bars
+  let nbl = num_brightness_levels
+  let table = ctx.color_table
+  let hues = ctx.bar_hues
+  let sats = ctx.bar_sats
+  let lights = ctx.bar_lights
+  for bar in 0..<num_bars {
+    let hue = hues[bar] + hue_offset
+    let sat = sats[bar]
+    let light = lights[bar]
+    let (br, bg, bb) = hsl_to_rgb(hue, sat, light)
+    let bar_off = bar * nbl
+    for level in 0..<nbl {
+      let brightness = 0.15 + level.to_double() / (nbl - 1).to_double() * 0.85
+      let r = (br.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
+      let g = (bg.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
+      let b = (bb.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
+      table.unsafe_set(bar_off + level, "\u001b[38;2;\{r};\{g};\{b}m")
+    }
+  }
 }
 
 ///|
@@ -457,7 +499,9 @@ fn create_display_context(
       is_grid[gb] = true
     }
   }
-  let (bar_r, bar_g, bar_b) = precompute_bar_colors(num_bars)
+  let (bar_r, bar_g, bar_b, bar_hues, bar_sats, bar_lights) = precompute_bar_colors(
+    num_bars,
+  )
   let color_table = precompute_color_table(
     bar_r, bar_g, bar_b, num_brightness_levels,
   )
@@ -557,6 +601,9 @@ fn create_display_context(
     db_scale_labels,
     waveform_colors: wf_tbl,
     bar_offsets: pre_bar_offsets,
+    bar_hues,
+    bar_sats,
+    bar_lights,
   }
 }
 
@@ -763,12 +810,18 @@ fn render_spectrum(
   let dominant_freq = dominant_bin * sample_rate / fft_size
   let note_name = freq_to_note(dominant_freq)
 
-  // --- Beat glow border ---
-  let beat_glow = if beat_intensity > 0.1 {
+  // --- Beat glow border with flash effect ---
+  // Strong beat: bright white-yellow flash; medium: orange-red; calm: cyan
+  let beat_glow = if beat_intensity > 0.6 {
+    // Flash: bright white-yellow on strong beats
+    "\u001b[1;38;2;255;255;\{(180 + (beat_intensity * 75.0).to_int())}m"
+  } else if beat_intensity > 0.1 {
     "\u001b[38;2;255;\{(beat_intensity * 200.0).to_int()};\{(beat_intensity * 100.0).to_int()}m"
   } else {
     "\u001b[1;36m"
   }
+  // Beat pulse: scale border thickness character on strong beats
+  let border_char = if beat_intensity > 0.5 { "━" } else { "═" }
 
   // --- Beat-reactive brightness boost (shift color level up to 4) ---
   let beat_boost = (beat_intensity * 6.0).to_int()
@@ -782,7 +835,7 @@ fn render_spectrum(
   sb.write_string(beat_glow)
   sb.write_string("╔")
   for _ in 0..<header_width {
-    sb.write_string("═")
+    sb.write_string(border_char)
   }
   sb.write_string("╗\n║ ")
   sb.write_string(title)
@@ -804,7 +857,7 @@ fn render_spectrum(
   }
   sb.write_string(" ║\n╚")
   for _ in 0..<header_width {
-    sb.write_string("═")
+    sb.write_string(border_char)
   }
   sb.write_string("╝\n\u001b[0m")
 
@@ -921,31 +974,39 @@ fn render_spectrum(
     sb.write_string("\n")
   }
 
-  // --- Bottom glow reflection with proper bar colors (3 rows) ---
-  for glow_row in 0..<3 {
+  // --- Mirror reflection: inverted bars with fading colors (3 rows) ---
+  // Creates a "water reflection" effect — bars mirror downward with
+  // decreasing brightness, giving a 3D depth illusion.
+  for mirror_row in 0..<3 {
     sb.write_string("\u001b[90m     \u001b[0m")
-    let glow_factor = match glow_row {
-      0 => 0.4
-      1 => 0.3
-      2 => 0.2
-      3 => 0.12
-      _ => 0.06
+    // Each mirror row shows a lower slice of the bar, with fading brightness
+    let mirror_slice = (mirror_row + 1) * sub_res
+    // Fade: row 0 = 60% brightness, row 1 = 35%, row 2 = 15%
+    let fade_level = match mirror_row {
+      0 => 14
+      1 => 8
+      _ => 3
     }
     for bar in 0..<num_bars {
-      let reflected_height = (heights[bar].to_double() * glow_factor).to_int()
-      let glow_level = (glow_row + 1) * sub_res
-      if reflected_height >= glow_level {
-        let color_level = match glow_row {
-          0 => 12
-          1 => 9
-          2 => 6
-          3 => 4
-          _ => 2
-        }
+      let h = heights[bar]
+      if h > mirror_slice {
+        // Full block in mirror
+        let level = (heights_d.unsafe_get(bar) * 0.5 + fade_level.to_double())
+          .to_int()
+          .clamp(min=0, max=nbl_minus_1)
         sb.write_string(
-          color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + color_level),
+          color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level),
         )
-        sb.write_string("▀")
+        sb.write_string("█")
+      } else if h > mirror_slice - sub_res && h > 0 {
+        // Partial block at mirror edge
+        let level = (heights_d.unsafe_get(bar) * 0.4 + fade_level.to_double())
+          .to_int()
+          .clamp(min=0, max=nbl_minus_1)
+        sb.write_string(
+          color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level),
+        )
+        sb.write_string("▄")
       } else {
         sb.write_string(" ")
       }
