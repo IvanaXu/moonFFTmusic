@@ -193,12 +193,11 @@ The `WV` line shows the time-domain waveform; `EN` shows energy history sparklin
 Terminal height is **auto-detected** via `LINES` env var — the display adapts
 to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 
-### Visual Effects (9 dynamic effects)
+### Visual Effects (14 dynamic effects)
 
 | Effect | Description |
 |--------|-------------|
 | 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
-| 🪞 Mirror reflection | Inverted bars below baseline, fading brightness (60%→35%→15%) |
 | ⚡ Beat flash border | Strong beats: white-yellow border + `═`→`━` thickness change |
 | 💥 Beat bloom | `beat_boost` ×10: all bars flash brighter on beats |
 | 👑 Bar top crown | Bar caps get +8 brightness — glowing crown effect |
@@ -206,6 +205,12 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 | 🔦 Dominant spotlight | Main frequency bar +5, neighbors +2 on beats |
 | 📊 Progress pulse | Progress bar brightness pulses with beat intensity |
 | 🎚️ RMS beat glow | RMS label turns yellow on strong beats |
+| 🌊 Spectrogram waterfall | 3-row scrolling history with blue→red color map (replaces mirror) |
+| 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted ▼ |
+| 🎵 BPM estimation | Beat timing analysis with ♥/♡ indicator and BPM display in header |
+| 🔊 Frequency band meters | BASS/MID/TREBLE 10-cell horizontal energy meters |
+| 🎛️ Auto-gain control | Dynamic sensitivity adjustment for quiet/loud sections |
+| 🎶 Note detection | Real-time MIDI note name (e.g. G4+) with cents deviation |
 
 ## MoonBit Language Features
 

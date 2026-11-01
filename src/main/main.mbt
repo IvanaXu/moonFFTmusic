@@ -43,9 +43,10 @@ async fn main {
       println("Environment:")
       println("  LINES:     terminal height for auto-layout (default: 26)")
       println("")
-      println("Visual effects: rainbow flow, mirror reflection, beat flash,")
-      println("  beat bloom, bar crown, scanline, dominant spotlight,")
-      println("  progress pulse, RMS glow")
+      println("Visual effects: rainbow flow, beat flash, beat bloom,")
+      println("  bar crown, scanline, dominant spotlight, progress pulse,")
+      println("  RMS glow, spectrogram waterfall, piano keyboard,")
+      println("  BPM estimation, frequency band meters, auto-gain")
       return
     }
     _ => ()
@@ -133,12 +134,6 @@ async fn main {
   // --- Initialize beat detector ---
   let beat_detector = BeatDetector::new(43)
 
-  // --- Initialize energy sparkline (MoonBit `mut` circular buffer) ---
-  let sparkline = EnergySparkline::new(num_bars * 2)
-
-  // --- Initialize peak frequency trail (MoonBit `enum` fade dispatch) ---
-  let peak_trail = PeakTrail::new(num_bars)
-
   // --- Initialize peak hold arrays ---
   let peak_heights = Array::make(num_bars, 0)
   let peak_frames = Array::make(num_bars, 0)
@@ -213,8 +208,9 @@ async fn main {
     }
 
     // Step 7: Update beat detector + energy sparkline + peak trail
-    let beat_intensity = beat_detector.update(rms)
-    sparkline.push(rms)
+    // Current time in seconds for BPM estimation
+    let current_time = pos.to_double() / wav.sample_rate.to_double()
+    let beat_intensity = beat_detector.update(rms, current_time)
 
     // Step 8: Fill waveform array in-place (no allocation)
     let wav_samples = wav.samples
@@ -251,14 +247,25 @@ async fn main {
     } else {
       last_dom_bar
     }
-    peak_trail.push(dom_bar)
-
     // Rainbow hue rotation: swap to precomputed color table (zero alloc)
     ctx.color_table_idx = frame_count % 40
     let display = render_spectrum(
-      magnitudes, ctx, peak_heights, peak_frames, prev_heights, render_prev, heights,
-      pos, total, rms, beat_intensity, waveform, total_time_str, sparkline, peak_trail,
+      magnitudes,
+      ctx,
+      peak_heights,
+      peak_frames,
+      prev_heights,
+      render_prev,
+      heights,
+      pos,
+      total,
+      rms,
+      beat_intensity,
+      waveform,
+      total_time_str,
       dom_bar,
+      beat_detector.bpm,
+      beat_detector.beat_pulse,
     )
     println(display)
 
