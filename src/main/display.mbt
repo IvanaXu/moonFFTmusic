@@ -126,14 +126,16 @@ struct DisplayContext {
   fft_size : Int32
   meter_colors : Array[String]
   label_strings : Array[String]
+  // Stable (non-rotating) colors for the frequency axis labels
+  label_colors : Array[String]
   db_scale_labels : Array[String]
   waveform_colors : Array[String]
   bar_offsets : Array[Int32]
   // Spectrogram waterfall: 3 rows of history
   spectrogram_history : Array[Array[Int32]]
   mut spectrogram_idx : Int32
-  // Precomputed spectrogram colors (32 levels: blue→cyan→green→yellow→red)
-  spectrogram_colors : Array[String]
+  // Precomputed spectrogram waterfall background tables (per-bar hue, rotating)
+  spectrogram_bg_tables : Array[Array[String]]
   // Auto-gain control
   mut auto_gain : Double
   // Band meter colors (green→yellow→red, 10 levels)
@@ -294,10 +296,10 @@ fn precompute_bar_colors(
     let ratio = bar.to_double() / (num_bars - 1).to_double()
     // Hue: 260 (indigo) -> 0 (red), wide vibrant spectrum
     let hue = 260.0 * (1.0 - ratio)
-    // Saturation: peaks at mid-range (0.95), lower at extremes (0.75)
-    let sat = 0.75 + 0.2 * (1.0 - (2.0 * ratio - 1.0).abs())
-    // Lightness: darker at bass (0.42), brighter at treble (0.60)
-    let light = 0.42 + 0.18 * ratio
+    // Saturation: vivid across the board, peaking slightly in the mid-range
+    let sat = 0.82 + 0.16 * (1.0 - (2.0 * ratio - 1.0).abs())
+    // Lightness: slightly darker at bass, brighter at treble
+    let light = 0.45 + 0.17 * ratio
     bar_hues[bar] = hue
     bar_sats[bar] = sat
     bar_lights[bar] = light
@@ -328,13 +330,24 @@ fn precompute_color_tables(
       let hue = bar_hues[bar] + hue_offset
       let sat = bar_sats[bar]
       let light = bar_lights[bar]
-      let (br, bg, bb) = hsl_to_rgb(hue, sat, light)
+      // Vertical hue gradient: a deeper hue at the base, a brighter hue at the
+      // top (±14°), so each column reads as a glowing neon tube instead of a
+      // flat fill. Colour still means frequency — the pair is anchored to the bar.
+      let (br0, bg0, bb0) = hsl_to_rgb(hue - 18.0, sat, light)
+      let (br1, bg1, bb1) = hsl_to_rgb(hue + 18.0, sat, light)
       let bar_off = bar * nbl
       for level in 0..<nbl {
-        let brightness = 0.22 + level.to_double() / (nbl - 1).to_double() * 0.78
-        let r = (br.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
-        let g = (bg.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
-        let b = (bb.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
+        let lr = level.to_double() / (nbl - 1).to_double()
+        let brightness = 0.22 + lr * 0.78
+        let r = ((br0.to_double() + (br1 - br0).to_double() * lr) * brightness)
+          .clamp(min=0.0, max=255.0)
+          .to_int()
+        let g = ((bg0.to_double() + (bg1 - bg0).to_double() * lr) * brightness)
+          .clamp(min=0.0, max=255.0)
+          .to_int()
+        let b = ((bb0.to_double() + (bb1 - bb0).to_double() * lr) * brightness)
+          .clamp(min=0.0, max=255.0)
+          .to_int()
         table.unsafe_set(bar_off + level, "\u001b[38;2;\{r};\{g};\{b}m")
       }
     }
@@ -374,18 +387,58 @@ fn freq_to_bar(
 ///|
 
 ///|
-/// Precompute spectrogram waterfall colors: blue→cyan→green→yellow→red
-/// 32 levels matching brightness levels
-fn precompute_spectrogram_colors(num_levels : Int32) -> Array[String] {
-  let colors = Array::make(num_levels, "")
-  for i in 0..<num_levels {
-    let ratio = i.to_double() / (num_levels - 1).to_double()
-    // Hue: 240 (blue) → 0 (red), through cyan(180), green(120), yellow(60)
-    let hue = 240.0 * (1.0 - ratio)
-    let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.5)
-    colors[i] = "\u001b[48;2;\{r};\{g};\{b}m "
+/// Precompute spectrogram waterfall background cells (per bar × level).
+/// Hue follows the SAME per-bar rainbow as the bars (color = frequency), and
+/// the tables rotate in lockstep with the bar color tables, so each frequency
+/// column keeps a continuous hue from the live bars down through the waterfall.
+/// Brightness carries intensity (dimmer than the bars, so history recedes).
+/// Each entry ends with a trailing space so it fills one terminal cell.
+fn precompute_spectro_bg_tables(
+  bar_hues : Array[Double],
+  bar_sats : Array[Double],
+  bar_lights : Array[Double],
+  num_bars : Int32,
+  num_tables : Int32,
+  hue_step : Double,
+) -> Array[Array[String]] {
+  let nbl = num_brightness_levels
+  let tables = Array::make(num_tables, Array::make(0, ""))
+  for tbl_idx in 0..<num_tables {
+    let hue_offset = tbl_idx.to_double() * hue_step
+    let table = Array::make(num_bars * nbl, "")
+    for bar in 0..<num_bars {
+      let hue = bar_hues[bar] + hue_offset
+      // Same vertical hue gradient as the live bars, so a column keeps a
+      // continuous colour from the spectrum down through the history rows.
+      let (br0, bg0, bb0) = hsl_to_rgb(
+        hue - 18.0,
+        bar_sats[bar],
+        bar_lights[bar],
+      )
+      let (br1, bg1, bb1) = hsl_to_rgb(
+        hue + 18.0,
+        bar_sats[bar],
+        bar_lights[bar],
+      )
+      let bar_off = bar * nbl
+      for level in 0..<nbl {
+        let lr = level.to_double() / (nbl - 1).to_double()
+        let brightness = 0.15 + lr * 0.66
+        let r = ((br0.to_double() + (br1 - br0).to_double() * lr) * brightness)
+          .clamp(min=0.0, max=255.0)
+          .to_int()
+        let g = ((bg0.to_double() + (bg1 - bg0).to_double() * lr) * brightness)
+          .clamp(min=0.0, max=255.0)
+          .to_int()
+        let b = ((bb0.to_double() + (bb1 - bb0).to_double() * lr) * brightness)
+          .clamp(min=0.0, max=255.0)
+          .to_int()
+        table.unsafe_set(bar_off + level, "\u001b[48;2;\{r};\{g};\{b}m ")
+      }
+    }
+    tables[tbl_idx] = table
   }
-  colors
+  tables
 }
 
 ///|
@@ -465,13 +518,38 @@ fn render_band_meters(
       treble_max = m
     }
   }
-  // Normalize and render 10-cell meters
+  // Normalize to the strongest band this frame. Raw FFT magnitudes are large
+  // (up to ~512), so the old absolute `max_val * 10` pegged every active band
+  // to full and the meters never showed gradation. Relative levels make the
+  // three bands comparable and allow partial fills to appear.
+  let frame_max = if bass_max > mid_max {
+    if bass_max > treble_max {
+      bass_max
+    } else {
+      treble_max
+    }
+  } else if mid_max > treble_max {
+    mid_max
+  } else {
+    treble_max
+  }
   let bands = [("BASS", bass_max), ("MID ", mid_max), ("TREB", treble_max)]
   sb.write_string("\u001b[90m      \u001b[0m")
   for band_idx in 0..<3 {
     let (label, max_val) = bands[band_idx]
     sb.write_string("\u001b[90m\{label} \u001b[0m")
-    let level = (max_val * 10.0).to_int().clamp(min=0, max=10)
+    let level = if frame_max > 1.0e-6 {
+      let ratio = max_val / frame_max
+      if ratio > 1.0e-6 {
+        // 40 dB display window: strongest band = 10 cells, -40 dB = 0 cells
+        let db = 20.0 * @math.log10(ratio)
+        ((db + 40.0) / 40.0 * 10.0).to_int().clamp(min=0, max=10)
+      } else {
+        0
+      }
+    } else {
+      0
+    }
     for i in 0..<10 {
       if i < level {
         let color_idx = (i.to_double() / 9.0 * 9.0).to_int().clamp(min=0, max=9)
@@ -529,6 +607,14 @@ fn create_display_context(
   let color_tables = precompute_color_tables(
     bar_hues, bar_sats, bar_lights, num_bars, 40, 3.0,
   )
+  // Precompute stable frequency-label colors. Unlike the bars these do NOT
+  // rotate with the rainbow: a coordinate axis should stay colour-stable so
+  // the labels remain readable while the spectrum animates.
+  let label_colors = Array::make(num_bars, "")
+  for bar in 0..<num_bars {
+    let (r, g, b) = hsl_to_rgb(bar_hues[bar], 0.40, 0.62)
+    label_colors[bar] = "\u001b[38;2;\{r};\{g};\{b}m"
+  }
   // Row contribution: range [3.0, 17.0] for 32 brightness levels
   // Bottom rows dimmer, top rows brighter — 3D glow effect
   let row_contrib = Array::makei(max_height, fn(row) {
@@ -612,8 +698,10 @@ fn create_display_context(
   let pre_bar_offsets = Array::makei(num_bars, fn(bar) {
     bar * num_brightness_levels
   })
-  // Precompute spectrogram colors (32 levels)
-  let spectro_colors = precompute_spectrogram_colors(num_brightness_levels)
+  // Precompute spectrogram waterfall background tables (per-bar hue, rotating)
+  let spectro_bg_tables = precompute_spectro_bg_tables(
+    bar_hues, bar_sats, bar_lights, num_bars, 40, 3.0,
+  )
   // Precompute band meter colors (green→yellow→red, 10 levels)
   let band_cols = Array::make(10, "")
   for i in 0..<10 {
@@ -641,6 +729,7 @@ fn create_display_context(
     fft_size,
     meter_colors,
     label_strings,
+    label_colors,
     db_scale_labels,
     waveform_colors: wf_tbl,
     bar_offsets: pre_bar_offsets,
@@ -648,7 +737,7 @@ fn create_display_context(
     peak_heights_d: Array::make(num_bars, 0.0),
     spectrogram_history: spectro_hist,
     spectrogram_idx: 0,
-    spectrogram_colors: spectro_colors,
+    spectrogram_bg_tables: spectro_bg_tables,
     auto_gain: 1.0,
     band_colors: band_cols,
   }
@@ -1105,11 +1194,11 @@ fn render_spectrum(
   }
 
   // --- Spectrogram waterfall: 3 rows of recent spectrum history ---
-  // Each row shows a previous frame, with colors mapping intensity.
-  // Row 0 = most recent, Row 2 = oldest. Creates a "waterfall" effect.
+  // Each row shows a previous frame; hue = frequency (matches the bars),
+  // brightness = intensity. Row 0 = most recent, Row 2 = oldest.
   let spectro_hist = ctx.spectrogram_history
   let spectro_idx = ctx.spectrogram_idx
-  let spectro_colors = ctx.spectrogram_colors
+  let spectro_tbl = ctx.spectrogram_bg_tables.unsafe_get(ctx.color_table_idx)
   for row in 0..<3 {
     sb.write_string("\u001b[90m      \u001b[0m")
     // Get the historical frame: row 0 = most recent (current frame - 1)
@@ -1122,7 +1211,9 @@ fn render_spectrum(
         let level = (h.to_double() * height_factor + 3.0)
           .to_int()
           .clamp(min=0, max=nbl_minus_1)
-        sb.write_string(spectro_colors.unsafe_get(level))
+        sb.write_string(
+          spectro_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level),
+        )
       } else {
         sb.write_string(" ")
       }
@@ -1148,7 +1239,7 @@ fn render_spectrum(
         sb.write_string(" ")
         label_pos = label_pos + 1
       }
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 20))
+      sb.write_string(ctx.label_colors.unsafe_get(i))
       sb.write_string(label)
       sb.write_string(ansi_reset)
       label_pos = label_pos + label.length()

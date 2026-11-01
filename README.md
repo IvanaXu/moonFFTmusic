@@ -207,7 +207,7 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 | 🔦 Dominant spotlight | Main frequency bar +5, neighbors +2 on beats |
 | 📊 Progress pulse | Progress bar brightness pulses with beat intensity |
 | 🎚️ RMS beat glow | RMS label turns yellow on strong beats |
-| 🌊 Spectrogram waterfall | 3-row scrolling history with blue→red color map (replaces mirror) |
+| 🌊 Spectrogram waterfall | 3-row scrolling history; per-frequency hue (matches bars) with intensity brightness |
 | 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted ▼ |
 | 🎵 BPM estimation | Beat timing analysis with ♥/♡ indicator and BPM display in header |
 | 🔊 Frequency band meters | BASS/MID/TREBLE 10-cell horizontal energy meters |

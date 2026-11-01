@@ -112,8 +112,21 @@ async fn main {
     None => 12 // default: fits 26-line terminal
   }
   let sub_res = 8
-  let sleep_ms : Int32 = 50
-  let hop_size = fft_size / 2
+  // Frame pacing: ~real-time playback at ~20 fps.
+  // Each frame advances the analysis window by one target interval (50 ms) of
+  // audio; sleep pacing leaves ~10 ms per frame for rendering, so the wall
+  // clock period is close to 50 ms and playback runs near real time. For CD
+  // audio the hop exceeds fft_size, so the FFT slides without overlap — a small
+  // spectral-smoothness trade for speed. Previously it advanced only fft_size/2
+  // per 50 ms, i.e. ~0.2× real time. Floor at fft_size/2 for low sample rates.
+  let sleep_ms : Int32 = 40
+  let analysis_interval_ms : Int32 = 50
+  let realtime_hop = wav.sample_rate * analysis_interval_ms / 1000
+  let hop_size = if realtime_hop > fft_size / 2 {
+    realtime_hop
+  } else {
+    fft_size / 2
+  }
 
   // --- Precompute all FFT tables ONCE at startup ---
   let (tw_re, tw_im) = precompute_twiddles_soa(fft_size)
