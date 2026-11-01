@@ -9,6 +9,8 @@ A real-time audio spectrum visualizer written in [MoonBit](https://www.moonbitla
 It reads a WAV file, performs Fast Fourier Transform (FFT) on audio chunks, and
 displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal.
 
+![Spectrum Analyzer Screenshot](docs/screenshot.png)
+
 ## Features
 
 ### Audio Engine (CPU-Optimized)
