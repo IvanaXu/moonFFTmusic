@@ -200,7 +200,7 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 | Effect | Description |
 |--------|-------------|
 | 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
-| ⚡ Beat flash border | Strong beats: white-yellow border + `═`→`━` thickness change |
+| ⚡ Beat flash border | Accents flash white-hot, soft beats warm; `═`→`━` on strong hits |
 | 💥 Beat bloom | Fast beat pulse + sustained intensity brighten all bars |
 | 👑 Bar top crown | Bar caps get +8 brightness — glowing crown effect |
 | 📡 Scanline | A +2 brightness row sweeps up/down across spectrum |

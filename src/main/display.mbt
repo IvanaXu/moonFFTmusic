@@ -163,6 +163,8 @@ struct BeatDetector {
   mut beat_pulse : Double
   // Total detected beats — drives the 4-step rhythm indicator
   mut beat_count : Int32
+  // EMA of recent detected-beat energies — gauges accent (loud) vs soft beats
+  mut beat_env : Double
 }
 
 ///|
@@ -181,6 +183,7 @@ fn BeatDetector::new(history_size : Int32) -> BeatDetector {
     bpm: 0.0,
     beat_pulse: 0.0,
     beat_count: 0,
+    beat_env: 0.0,
   }
 }
 
@@ -211,6 +214,15 @@ fn BeatDetector::update(
     time_since_last > 0.15
   if is_beat {
     self.beat_intensity = 1.0
+    // Accent gauge: compare this beat against the recent beat envelope so
+    // louder beats flash brighter than soft ones — the display conveys the
+    // groove, not merely the tempo.
+    if self.beat_env <= 0.0 || energy > self.beat_env {
+      self.beat_env = energy
+    } else {
+      self.beat_env = self.beat_env * 0.94
+    }
+    let strength = (energy / self.beat_env).clamp(min=0.5, max=1.0)
     // BPM estimation: record beat interval
     if self.last_beat_time > 0.0 {
       let interval = time_since_last
@@ -235,7 +247,9 @@ fn BeatDetector::update(
       }
     }
     self.last_beat_time = current_time
-    self.beat_pulse = 1.0
+    // Pulse amplitude reflects beat strength: accents hit the full white-hot
+    // flash, soft beats only a gentler warm one (0.5..1.0).
+    self.beat_pulse = strength
     self.beat_count = self.beat_count + 1
   } else {
     self.beat_intensity *= 0.92
