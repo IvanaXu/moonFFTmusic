@@ -201,10 +201,10 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 |--------|-------------|
 | 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
 | ⚡ Beat flash border | Strong beats: white-yellow border + `═`→`━` thickness change |
-| 💥 Beat bloom | `beat_boost` ×10: all bars flash brighter on beats |
+| 💥 Beat bloom | Fast beat pulse + sustained intensity brighten all bars |
 | 👑 Bar top crown | Bar caps get +8 brightness — glowing crown effect |
 | 📡 Scanline | A +2 brightness row sweeps up/down across spectrum |
-| 🔦 Dominant spotlight | Main frequency bar +5, neighbors +2 on beats |
+| 🔦 Dominant spotlight | Main frequency bar + neighbors brighten on beat pulses |
 | 📊 Progress pulse | Cyan→violet progress bar (distinct from spectrum) pulses on beats |
 | 🎚️ RMS beat glow | RMS label turns yellow on strong beats |
 | 🌊 Spectrogram waterfall | 3-row scrolling history; per-frequency hue (matches bars) with intensity brightness |

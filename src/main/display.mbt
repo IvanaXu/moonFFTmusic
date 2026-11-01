@@ -235,7 +235,9 @@ fn BeatDetector::update(
     self.beat_pulse = 1.0
   } else {
     self.beat_intensity *= 0.92
-    self.beat_pulse *= 0.85
+    // Sharper pulse decay (~0.25 s) so beat flashes read as crisp hits that
+    // return to calm well before the next beat at common tempos.
+    self.beat_pulse *= 0.78
   }
   self.beat_intensity
 }
@@ -835,7 +837,7 @@ fn render_waveform(
   sb : StringBuilder,
   waveform : Array[Double],
   width : Int32,
-  beat_intensity : Double,
+  pulse : Double,
   wf_colors : Array[String],
 ) -> Unit {
   sb.write_string("\u001b[90m   WV \u001b[0m")
@@ -845,7 +847,7 @@ fn render_waveform(
     return
   }
   let step = n.to_double() / width.to_double()
-  let has_beat = beat_intensity > 0.3
+  let has_beat = pulse > 0.3
   for i in 0..<width {
     let sample_idx = (i.to_double() * step).to_int().clamp(min=0, max=n - 1)
     let sample = waveform[sample_idx]
@@ -857,10 +859,10 @@ fn render_waveform(
     // Beat override for high-amplitude bars (rare path)
     if has_beat && (scaled >= 3 || scaled <= -3) {
       if scaled >= 3 {
-        let r = 200 + (beat_intensity * 55.0).to_int()
+        let r = 200 + (pulse * 55.0).to_int()
         sb.write_string("\u001b[38;2;\{r};255;100m█\u001b[0m")
       } else {
-        let r = 100 + (beat_intensity * 155.0).to_int()
+        let r = 100 + (pulse * 155.0).to_int()
         sb.write_string("\u001b[38;2;\{r};150;255m█\u001b[0m")
       }
     } else {
@@ -994,25 +996,27 @@ fn render_spectrum(
   let note_name = freq_to_note(dominant_freq_int)
 
   // --- Beat glow border with flash effect ---
-  // Strong beat: bright white-yellow flash; clear beat: warm pulse;
-  // calm: soft cyan. The warm threshold was 0.1, but beat_intensity decays
-  // only ×0.92/frame, so the border stayed warm-red for ~1.5s at a time and
-  // clashed with the cool spectrum palette. Raised to 0.35 so the border
-  // returns to cyan between beats, and the calm color is a softer cyan.
-  let beat_glow = if beat_intensity > 0.6 {
+  // Driven by the FAST beat_pulse (×0.85/frame), not the slow beat_intensity
+  // (×0.92/frame). At ~120 BPM the slow value never fell back below the warm
+  // threshold before the next beat, so the border sat permanently warm and the
+  // flash vanished. The pulse returns to calm between beats, so each hit reads
+  // as a real flash: bright white on the hit, warm decay, then soft cyan.
+  let flash = beat_pulse
+  let beat_glow = if flash > 0.6 {
     // Flash: bright white-yellow on strong beats
-    "\u001b[1;38;2;255;255;\{(180 + (beat_intensity * 75.0).to_int())}m"
-  } else if beat_intensity > 0.35 {
-    "\u001b[38;2;255;\{(60.0 + beat_intensity * 170.0).to_int()};\{(30.0 + beat_intensity * 90.0).to_int()}m"
+    "\u001b[1;38;2;255;255;\{(180 + (flash * 75.0).to_int())}m"
+  } else if flash > 0.3 {
+    "\u001b[38;2;255;\{(60.0 + flash * 170.0).to_int()};\{(30.0 + flash * 90.0).to_int()}m"
   } else {
     "\u001b[38;2;90;200;230m"
   }
   // Beat pulse: scale border thickness character on strong beats
-  let border_char = if beat_intensity > 0.5 { "━" } else { "═" }
+  let border_char = if flash > 0.5 { "━" } else { "═" }
 
-  // --- Beat-reactive brightness boost (shift color level up to 4) ---
-  // Beat bloom: brightness boost on all bars, more dramatic on strong beats
-  let beat_boost = (beat_intensity * 10.0).to_int()
+  // --- Beat-reactive brightness boost ---
+  // Fast pulse gives a snappy brightness hit on each beat; the slow intensity
+  // keeps a gentle sustained bloom. Together they read as punch + afterglow.
+  let beat_boost = (beat_intensity * 4.0 + beat_pulse * 8.0).to_int()
   // Scanline: a gentle highlight row that sweeps up and down.
   // Advance one row per frame (pos rises by fft_size/2 each frame); the old
   // `current_pos / sub_res` stepped 64 rows per frame, i.e. it looked random.
@@ -1031,7 +1035,7 @@ fn render_spectrum(
   let title = truncate_to_width(
     "🎵 MoonFFTmusic — Real-time Spectrum Analyzer", text_width,
   )
-  let beat_indicator = if beat_intensity > 0.5 { " ♫" } else { "  " }
+  let beat_indicator = if beat_pulse > 0.5 { " ♫" } else { "  " }
   let bpm_str = if bpm > 0.0 { " | \{bpm.to_int()} BPM" } else { "" }
   let info_line = truncate_to_width(
     "\{sample_rate}Hz | FFT \{fft_size} | Peak \{format_freq(dominant_freq_int)} (\{note_name})\{beat_indicator}\{bpm_str} | \{format_time(current_pos, sample_rate)}",
@@ -1149,12 +1153,12 @@ fn render_spectrum(
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
           // Spotlight: dominant bar + neighbors get extra brightness on beats
-          let dom_boost = if beat_intensity > 0.2 {
+          let dom_boost = if beat_pulse > 0.2 {
             let dist = (bar - dom_bar).abs()
             if dist == 0 {
-              beat_intensity * 5.0
+              beat_pulse * 6.0
             } else if dist == 1 {
-              beat_intensity * 2.0
+              beat_pulse * 2.5
             } else {
               0.0
             }
@@ -1262,7 +1266,7 @@ fn render_spectrum(
   sb.write_string("\n")
 
   // --- Waveform strip ---
-  render_waveform(sb, waveform, num_bars, beat_intensity, ctx.waveform_colors)
+  render_waveform(sb, waveform, num_bars, beat_pulse, ctx.waveform_colors)
 
   // --- Energy history sparkline (MoonBit `mut` circular buffer) ---
   render_band_meters(sb, magnitudes, num_bars, ctx.band_colors)
@@ -1282,11 +1286,7 @@ fn render_spectrum(
 
   let meter_width = 20
   // RMS meter with beat-reactive glow
-  let rms_glow = if beat_intensity > 0.5 {
-    "\u001b[1;33m"
-  } else {
-    "\u001b[1;37m"
-  }
+  let rms_glow = if beat_pulse > 0.5 { "\u001b[1;33m" } else { "\u001b[1;37m" }
   sb.write_string("      ")
   sb.write_string(rms_glow)
   sb.write_string("RMS: \u001b[0m[")
@@ -1311,9 +1311,8 @@ fn render_spectrum(
   }
   let progress_filled = (progress_pct * num_bars.to_double()).to_int()
 
-  // Progress bar with beat-reactive pulse (bold on beats)
-  let prog_beat_boost = (beat_intensity * 4.0).to_int()
-  let prog_glow = if prog_beat_boost > 0 { "\u001b[1m" } else { "" }
+  // Progress bar with beat-reactive pulse (bold on beat hits)
+  let prog_glow = if beat_pulse > 0.3 { "\u001b[1m" } else { "" }
   for i in 0..<num_bars {
     if i < progress_filled {
       sb.write_string(prog_glow)
