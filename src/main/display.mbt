@@ -641,7 +641,7 @@ fn render_spectrum(
   peak_heights : Array[Int32],
   peak_frames : Array[Int32],
   prev_heights : Array[Int32],
-  render_prev : Array[Int32],
+  render_prev : Array[Double],
   heights : Array[Int32],
   current_pos : Int32,
   total_samples : Int32,
@@ -651,6 +651,7 @@ fn render_spectrum(
   total_time_str : String,
   sparkline : EnergySparkline,
   peak_trail : PeakTrail,
+  dom_bar : Int32,
 ) -> String {
   let sb = StringBuilder::StringBuilder()
   let num_bars = ctx.num_bars
@@ -662,15 +663,10 @@ fn render_spectrum(
 
   sb.write_string(ansi_clear)
 
-  // --- Fused pass 1: height calc + dominant bar + attack/release envelope ---
-  let mut dominant_bar = 0
-  let mut max_mag = 0.0
+  // --- Fused pass 1: height calc + attack/release envelope ---
+  // dominant_bar (dom_bar) is passed in with sticky logic from main.mbt
   for bar in 0..<num_bars {
     let mag = magnitudes[bar]
-    if mag > max_mag {
-      max_mag = mag
-      dominant_bar = bar
-    }
     let raw_height = (scale_magnitude(mag) * max_levels.to_double()).to_int()
     // Attack/release envelope (inline — saves one loop over num_bars)
     // Less aggressive attack (0.5/0.5) reduces rise-time flicker
@@ -699,14 +695,13 @@ fn render_spectrum(
     // Stronger spatial smoothing (0.3/0.4/0.3) suppresses inter-bar flicker
     let blurred = left * 0.3 + center * 0.4 + right * 0.3
     prev_val = center
-    // Temporal IIR: blend with previous frame's final height
-    // This is the key anti-flicker measure — eliminates single-step
-    // oscillation (e.g. 15↔16) by low-pass filtering the final output.
-    let new_h = (blurred + 0.5).to_int()
-    let old_h = render_prev.unsafe_get(bar)
-    let temporal = (old_h.to_double() * 0.35 + new_h.to_double() * 0.65 + 0.5).to_int()
-    heights[bar] = temporal
-    render_prev.unsafe_set(bar, temporal)
+    // Temporal IIR on doubles — the key anti-flicker measure.
+    // Operating on doubles (not ints) is critical: an int IIR cannot
+    // eliminate ±1 oscillation (e.g. 15↔16), but a double IIR smooths
+    // the value to ~15.4 which quantizes stably to 15.
+    let iir_val = render_prev.unsafe_get(bar) * 0.4 + blurred * 0.6
+    render_prev.unsafe_set(bar, iir_val)
+    heights[bar] = (iir_val + 0.5).to_int()
     // Peak hold update (inline — saves one loop over num_bars)
     match (heights[bar] >= peak_heights[bar], peak_frames[bar] > 3) {
       (true, _) => {
@@ -723,7 +718,7 @@ fn render_spectrum(
   }
 
   // --- Dominant frequency + note ---
-  let dominant_bin = ctx.bin_map[dominant_bar]
+  let dominant_bin = ctx.bin_map[dom_bar]
   let dominant_freq = dominant_bin * sample_rate / fft_size
   let note_name = freq_to_note(dominant_freq)
 
@@ -790,7 +785,7 @@ fn render_spectrum(
   // --- Peak marker row with bar top connectors (MoonBit `match` dispatch) ---
   sb.write_string("\u001b[90m     \u001b[0m")
   for bar in 0..<num_bars {
-    if bar == dominant_bar && heights[bar] > 0 {
+    if bar == dom_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
     } else if heights[bar] > 0 {
       // Bar top connector — use blended height for temporal stability

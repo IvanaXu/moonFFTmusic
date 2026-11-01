@@ -114,7 +114,7 @@ async fn main {
 
   // --- Initialize temporal smoothing state ---
   let prev_heights = Array::make(num_bars, 0)
-  let render_prev = Array::make(num_bars, 0) // temporal IIR state for anti-flicker
+  let render_prev = Array::make(num_bars, 0.0) // double IIR state for anti-flicker
 
   // --- Pre-allocate ALL per-frame arrays (reused every frame, zero alloc) ---
   let re = Array::make(fft_size, 0.0) // FFT real input/output
@@ -224,6 +224,7 @@ async fn main {
     let display = render_spectrum(
       magnitudes, ctx, peak_heights, peak_frames, prev_heights, render_prev, heights,
       pos, total, rms, beat_intensity, waveform, total_time_str, sparkline, peak_trail,
+      dom_bar,
     )
     println(display)
 
