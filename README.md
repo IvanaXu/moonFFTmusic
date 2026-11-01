@@ -79,6 +79,10 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | Height double conversion | `to_double()` × `height_factor` per bar per row | Precomputed `heights_d[]` before row loop | Eliminates 2400 `to_double`+multiply/frame |
 | IIR anti-flicker state | `Array[Int32]` (integer IIR can't eliminate ±1 oscillation) | `Array[Double]` (float IIR before quantization) | Eliminates residual ±1 flicker |
 | Dominant bar marker | Raw `dominant_bar` recomputed per frame | Sticky `dom_bar` passed from `main.mbt` | Eliminates ▼ marker jumping |
+| Rainbow hue rotation | `rotate_hue()` 1920 string allocs/frame | Precomputed 40 color tables, swap index | Zero per-frame string allocs |
+| `heights_d`/`peak_heights_d` | `Array::make` per frame | Pre-allocated in `DisplayContext` | Eliminates 120 Double allocs/frame |
+| Terminal height | Fixed `max_height=26` (45 lines/frame) | Auto-detect `LINES` env var | Eliminates scroll flicker on small terminals |
+| Layout compaction | 45 lines/frame (header+sep+26 bars+5 glow+...) | 30 lines/frame (removed sep, glow 5→3) | Fits 30-line terminals |
 
 ## How to Run
 
@@ -188,6 +192,20 @@ brightness, creating a 3D water-reflection depth illusion.
 The `WV` line shows the time-domain waveform; `EN` shows energy history sparkline.
 Terminal height is **auto-detected** via `LINES` env var — the display adapts
 to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
+
+### Visual Effects (9 dynamic effects)
+
+| Effect | Description |
+|--------|-------------|
+| 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
+| 🪞 Mirror reflection | Inverted bars below baseline, fading brightness (60%→35%→15%) |
+| ⚡ Beat flash border | Strong beats: white-yellow border + `═`→`━` thickness change |
+| 💥 Beat bloom | `beat_boost` ×10: all bars flash brighter on beats |
+| 👑 Bar top crown | Bar caps get +8 brightness — glowing crown effect |
+| 📡 Scanline | A +2 brightness row sweeps up/down across spectrum |
+| 🔦 Dominant spotlight | Main frequency bar +5, neighbors +2 on beats |
+| 📊 Progress pulse | Progress bar brightness pulses with beat intensity |
+| 🎚️ RMS beat glow | RMS label turns yellow on strong beats |
 
 ## MoonBit Language Features
 
