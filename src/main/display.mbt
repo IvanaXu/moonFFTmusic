@@ -343,17 +343,7 @@ fn hsl_to_rgb(h : Double, s : Double, l : Double) -> (Int32, Int32, Int32) {
 ///|
 fn precompute_bar_colors(
   num_bars : Int32,
-) -> (
-  Array[Int32],
-  Array[Int32],
-  Array[Int32],
-  Array[Double],
-  Array[Double],
-  Array[Double],
-) {
-  let bar_r = Array::make(num_bars, 0)
-  let bar_g = Array::make(num_bars, 0)
-  let bar_b = Array::make(num_bars, 0)
+) -> (Array[Double], Array[Double], Array[Double]) {
   let bar_hues = Array::make(num_bars, 0.0)
   let bar_sats = Array::make(num_bars, 0.0)
   let bar_lights = Array::make(num_bars, 0.0)
@@ -365,15 +355,11 @@ fn precompute_bar_colors(
     let sat = 0.75 + 0.2 * (1.0 - (2.0 * ratio - 1.0).abs())
     // Lightness: darker at bass (0.42), brighter at treble (0.60)
     let light = 0.42 + 0.18 * ratio
-    let (r, g, b) = hsl_to_rgb(hue, sat, light)
-    bar_r[bar] = r
-    bar_g[bar] = g
-    bar_b[bar] = b
     bar_hues[bar] = hue
     bar_sats[bar] = sat
     bar_lights[bar] = light
   }
-  (bar_r, bar_g, bar_b, bar_hues, bar_sats, bar_lights)
+  (bar_hues, bar_sats, bar_lights)
 }
 
 ///|
@@ -481,9 +467,7 @@ fn create_display_context(
       is_grid[gb] = true
     }
   }
-  let (_, _, _, bar_hues, bar_sats, bar_lights) = precompute_bar_colors(
-    num_bars,
-  )
+  let (bar_hues, bar_sats, bar_lights) = precompute_bar_colors(num_bars)
   let color_tables = precompute_color_tables(
     bar_hues, bar_sats, bar_lights, num_bars, 40, 3.0,
   )
