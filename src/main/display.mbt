@@ -140,6 +140,8 @@ struct DisplayContext {
   mut auto_gain : Double
   // Band meter colors (green→yellow→red, 10 levels)
   band_colors : Array[String]
+  // Progress-bar colors (cool cyan→violet ramp along the bar)
+  progress_colors : Array[String]
 }
 
 ///|
@@ -631,6 +633,15 @@ fn create_display_context(
     let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
     meter_colors[i] = "\u001b[38;2;\{r};\{g};\{b}m"
   }
+  // Precompute progress-bar colors: a cool cyan→violet ramp along the bar.
+  // Deliberately different from the spectrum rainbow so the progress reads as a
+  // UI element rather than another miniature spectrum.
+  let progress_colors = Array::make(num_bars, "")
+  for i in 0..<num_bars {
+    let ratio = i.to_double() / (num_bars - 1).to_double()
+    let (r, g, b) = hsl_to_rgb(190.0 + ratio * 95.0, 0.75, 0.60)
+    progress_colors[i] = "\u001b[38;2;\{r};\{g};\{b}m"
+  }
   // Precompute frequency label strings — eliminates per-frame nested loop
   // and format_freq calls. label_strings[bar] holds PLAIN text only: ANSI
   // codes must never be stored here because their length would be mistaken
@@ -656,8 +667,10 @@ fn create_display_context(
     let label_row = row * 5 / max_height
     if label_row < 5 && label_row != prev_label_row {
       prev_label_row = label_row
-      let hue = 260.0 - label_row.to_double() * 52.0
-      let (r, g, b) = hsl_to_rgb(hue, 0.3, 0.6)
+      // Single cool hue, dimming with depth, so the dB scale reads as a calm
+      // instrument axis instead of five unrelated colors.
+      let light = 0.64 - label_row.to_double() * 0.06
+      let (r, g, b) = hsl_to_rgb(228.0, 0.28, light)
       db_scale_labels[row] = "\u001b[38;2;\{r};\{g};\{b}m" +
         labels[label_row] +
         ansi_reset +
@@ -740,6 +753,7 @@ fn create_display_context(
     spectrogram_bg_tables: spectro_bg_tables,
     auto_gain: 1.0,
     band_colors: band_cols,
+    progress_colors,
   }
 }
 
@@ -1297,16 +1311,17 @@ fn render_spectrum(
   }
   let progress_filled = (progress_pct * num_bars.to_double()).to_int()
 
-  // Progress bar with beat-reactive brightness pulse
+  // Progress bar with beat-reactive pulse (bold on beats)
   let prog_beat_boost = (beat_intensity * 4.0).to_int()
+  let prog_glow = if prog_beat_boost > 0 { "\u001b[1m" } else { "" }
   for i in 0..<num_bars {
     if i < progress_filled {
-      let pl = (28 + prog_beat_boost).clamp(min=0, max=nbl_minus_1)
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + pl))
+      sb.write_string(prog_glow)
+      sb.write_string(ctx.progress_colors.unsafe_get(i))
       sb.write_string("║")
     } else if i == progress_filled {
-      let pl = (28 + prog_beat_boost).clamp(min=0, max=nbl_minus_1)
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + pl))
+      sb.write_string(prog_glow)
+      sb.write_string(ctx.progress_colors.unsafe_get(i))
       sb.write_string("▓")
     } else {
       sb.write_string("\u001b[90m░")
