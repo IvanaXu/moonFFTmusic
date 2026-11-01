@@ -923,7 +923,20 @@ fn render_spectrum(
       match
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
-          let level = (row_base + heights_d.unsafe_get(bar))
+          // Spotlight: dominant bar + neighbors get extra brightness on beats
+          let dom_boost = if beat_intensity > 0.2 {
+            let dist = (bar - dom_bar).abs()
+            if dist == 0 {
+              beat_intensity * 5.0
+            } else if dist == 1 {
+              beat_intensity * 2.0
+            } else {
+              0.0
+            }
+          } else {
+            0.0
+          }
+          let level = (row_base + heights_d.unsafe_get(bar) + dom_boost)
             .to_int()
             .clamp(min=0, max=nbl_minus_1)
           sb.write_string(color_tbl.unsafe_get(bar_off + level))
@@ -1048,7 +1061,14 @@ fn render_spectrum(
   let meter_filled = (rms_pct * 20.0).to_int()
 
   let meter_width = 20
-  sb.write_string("\u001b[1;37mRMS: \u001b[0m[")
+  // RMS meter with beat-reactive glow
+  let rms_glow = if beat_intensity > 0.5 {
+    "\u001b[1;33m"
+  } else {
+    "\u001b[1;37m"
+  }
+  sb.write_string(rms_glow)
+  sb.write_string("RMS: \u001b[0m[")
   for i in 0..<meter_width {
     if i < meter_filled {
       sb.write_string(ctx.meter_colors.unsafe_get(i))
@@ -1070,12 +1090,16 @@ fn render_spectrum(
   }
   let progress_filled = (progress_pct * num_bars.to_double()).to_int()
 
+  // Progress bar with beat-reactive brightness pulse
+  let prog_beat_boost = (beat_intensity * 4.0).to_int()
   for i in 0..<num_bars {
     if i < progress_filled {
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 28))
+      let pl = (28 + prog_beat_boost).clamp(min=0, max=nbl_minus_1)
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + pl))
       sb.write_string("║")
     } else if i == progress_filled {
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 28))
+      let pl = (28 + prog_beat_boost).clamp(min=0, max=nbl_minus_1)
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + pl))
       sb.write_string("▓")
     } else {
       sb.write_string("\u001b[90m░")
