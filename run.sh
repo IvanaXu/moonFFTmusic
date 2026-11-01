@@ -8,13 +8,13 @@ set -e
 export PATH="/root/.moon/bin:/workspace/.moon/bin:$PATH"
 
 # Default arguments
-WAV_FILE="${1:-test.wav}"
+WAV_FILE="${1:-assets/test.wav}"
 FFT_SIZE="${2:-1024}"
 
 # Generate test WAV file if it doesn't exist
 if [ ! -f "$WAV_FILE" ]; then
     echo "Generating test WAV file: $WAV_FILE"
-    python3 gen_wav.py "$WAV_FILE" 440.0
+    python3 scripts/gen_wav.py "$WAV_FILE" 440.0
 fi
 
 # Build the project (release for best performance)
