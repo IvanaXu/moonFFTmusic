@@ -180,9 +180,14 @@ RMS: [████████████████░░░░] -6.0 dB
 ║║║║║║║║║║║║║║║║║║║║║║║║║║▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 44%  0:0.2 / 0:0.5
 ```
 
-Bars use smooth 24-bit true-color RGB gradient (blue → cyan → green → yellow → red).
-The header border glows warm orange on detected beats. The `WV` line shows the
-time-domain waveform. Press `Ctrl+C` to stop.
+Bars use smooth 24-bit true-color RGB gradient with **rainbow hue rotation** —
+the entire color spectrum flows and shifts over time like an aurora.
+The header border **flashes white-yellow** on strong beats (═ → ━).
+Below the main bars, a **mirror reflection** shows inverted bars with fading
+brightness, creating a 3D water-reflection depth illusion.
+The `WV` line shows the time-domain waveform; `EN` shows energy history sparkline.
+Terminal height is **auto-detected** via `LINES` env var — the display adapts
+to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 
 ## MoonBit Language Features
 
