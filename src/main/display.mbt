@@ -280,7 +280,6 @@ fn connector_char(left_h : Int32, curr_h : Int32, right_h : Int32) -> String {
 ///|
 enum BarState {
   FullBlock
-  BarCap
   PartialBlock(Int32)
   PeakMarker
   Empty
@@ -847,11 +846,10 @@ fn bar_state(
   level_bottom : Int32,
 ) -> BarState {
   if height >= level_top {
-    if height < level_top + 8 {
-      BarCap
-    } else {
-      FullBlock
-    }
+    // Fully covered cell — draw solid. Previously a cell within 8 sub-levels
+    // of the top was drawn as a half block ▀, leaving the lower half of the
+    // cell empty and producing a visible half-cell gap under every bar top.
+    FullBlock
   } else if height > level_bottom {
     let frac = height - level_bottom
     PartialBlock(frac.clamp(min=0, max=8))
@@ -1208,16 +1206,10 @@ fn render_spectrum(
           sb.write_string(color_tbl.unsafe_get(bar_off + level))
           sb.write_string("█")
         }
-        BarCap => {
-          // Crown: extra brightness on bar top — glowing cap effect
-          let level = (row_base + heights_d.unsafe_get(bar) + 8.0)
-            .to_int()
-            .clamp(min=0, max=nbl_minus_1)
-          sb.write_string(color_tbl.unsafe_get(bar_off + level))
-          sb.write_string("▀")
-        }
         PartialBlock(frac) => {
-          let level = (row_base + heights_d.unsafe_get(bar))
+          // Top tip: a lower-fraction block that sits flush on the full cells
+          // below (no gap), with a crown glow (+8) marking the bar's crest.
+          let level = (row_base + heights_d.unsafe_get(bar) + 8.0)
             .to_int()
             .clamp(min=0, max=nbl_minus_1)
           sb.write_string(color_tbl.unsafe_get(bar_off + level))

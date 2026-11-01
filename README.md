@@ -44,7 +44,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | 9 | Bar grouping | Subtle gap every 3 bars for cleaner visual separation |
 | 10 | Bottom glow reflection | 3-row dim mirror of spectrum with fading intensity |
 | 11 | Dashed reference line | `┄` pattern at -12dB, `·` at gap positions |
-| 12 | Bar caps | `▀` character at topmost cell for sealed-top look |
+| 12 | Bar tops | Top cell is a fractional block flush on the body (no half-cell gap) |
 | 13 | Peak frequency marker | Yellow `▼` arrow above dominant frequency bar |
 | 14 | Vertical frequency grid | Faint `╎` at label positions (50Hz – 10kHz) |
 | 15 | Magnitude-based color | Brightness = 50% row position + 50% magnitude ratio |
@@ -202,7 +202,7 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 | 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
 | ⚡ Beat flash border | Accents flash white-hot, soft beats warm; `═`→`━` on strong hits |
 | 💥 Beat bloom | Fast beat pulse + sustained intensity brighten all bars |
-| 👑 Bar top crown | Bar caps get +8 brightness — glowing crown effect |
+| 👑 Bar top crown | Topmost fractional cell gets +8 brightness — glowing crest |
 | 📡 Scanline | A +2 brightness row sweeps up/down across spectrum |
 | 🔦 Dominant spotlight | Main frequency bar + neighbors brighten on beat pulses |
 | 📊 Progress pulse | Cyan→violet progress bar (distinct from spectrum) pulses on beats |
