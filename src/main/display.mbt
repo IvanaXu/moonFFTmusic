@@ -318,7 +318,7 @@ fn precompute_color_tables(
       let (br, bg, bb) = hsl_to_rgb(hue, sat, light)
       let bar_off = bar * nbl
       for level in 0..<nbl {
-        let brightness = 0.15 + level.to_double() / (nbl - 1).to_double() * 0.85
+        let brightness = 0.22 + level.to_double() / (nbl - 1).to_double() * 0.78
         let r = (br.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
         let g = (bg.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
         let b = (bb.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
@@ -404,11 +404,11 @@ fn render_piano_keyboard(
       // Detected note — bright yellow highlight
       sb.write_string("\u001b[1;33m\u{25BC}\u001b[0m")
     } else if is_black {
-      // Black key — dim purple
-      sb.write_string("\u001b[38;2;80;60;100m\u{2502}\u001b[0m")
+      // Black key — medium purple (brightened for visibility on dark terminals)
+      sb.write_string("\u001b[38;2;120;90;155m\u{2502}\u001b[0m")
     } else {
-      // White key — dim blue-gray
-      sb.write_string("\u001b[38;2;60;70;90m\u{2502}\u001b[0m")
+      // White key — cool blue-gray (brightened for visibility)
+      sb.write_string("\u001b[38;2;100;110;140m\u{2502}\u001b[0m")
     }
   }
   // Show octave labels
@@ -573,7 +573,7 @@ fn create_display_context(
   let wf_tbl = Array::make(9 * 256, "")
   for amp in 0..<256 {
     // scaled 0: fixed dim color
-    wf_tbl[4 * 256 + amp] = "\u001b[38;2;60;70;90m─\u001b[0m"
+    wf_tbl[4 * 256 + amp] = "\u001b[38;2;88;98;124m─\u001b[0m"
     // scaled 1: g = 180 + amp/4
     let g1 = 180 + amp / 4
     wf_tbl[5 * 256 + amp] = "\u001b[38;2;80;\{g1};200m▔\u001b[0m"
@@ -893,10 +893,11 @@ fn render_spectrum(
   // --- Beat-reactive brightness boost (shift color level up to 4) ---
   // Beat bloom: brightness boost on all bars, more dramatic on strong beats
   let beat_boost = (beat_intensity * 10.0).to_int()
-  // Scanline: a gentle highlight row that sweeps up and down
-  // Uses current_pos as time source — no extra parameter needed
+  // Scanline: a gentle highlight row that sweeps up and down.
+  // Advance one row per frame (pos rises by fft_size/2 each frame); the old
+  // `current_pos / sub_res` stepped 64 rows per frame, i.e. it looked random.
   let scan_cycle = max_height * 2
-  let scan_raw = current_pos / sub_res % scan_cycle
+  let scan_raw = current_pos / (fft_size / 2) % scan_cycle
   let scan_row = if scan_raw < max_height {
     scan_raw
   } else {
@@ -973,13 +974,16 @@ fn render_spectrum(
       } else {
         0
       }
-      let level = (heights[bar].to_double() * height_factor + 12.0)
+      // Connector line sits on the bar-top envelope. Raised brightness floor
+      // (+16, min 10) keeps the ridge visible even for short/quiet bars —
+      // previously it rendered near-black and effectively disappeared.
+      let level = (heights[bar].to_double() * height_factor + 16.0)
         .to_int()
-        .clamp(min=4, max=nbl_minus_1)
+        .clamp(min=10, max=nbl_minus_1)
       sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level))
       sb.write_string(connector_char(left_h, blend_h, right_h))
     } else if ctx.is_grid[bar] {
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + 3))
+      sb.write_string("\u001b[38;2;58;72;104m")
       sb.write_string("╎\u001b[0m")
     } else {
       sb.write_string(" ")
@@ -1069,10 +1073,10 @@ fn render_spectrum(
         }
         Empty =>
           if ctx.is_grid[bar] {
-            sb.write_string(color_tbl.unsafe_get(bar_off + 3))
+            sb.write_string("\u001b[38;2;58;72;104m")
             sb.write_string("╎\u001b[0m")
           } else if ref_line {
-            sb.write_string(color_tbl.unsafe_get(bar_off + 2))
+            sb.write_string("\u001b[38;2;72;84;116m")
             sb.write_string("┄\u001b[0m")
           } else {
             sb.write_string(" ")
