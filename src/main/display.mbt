@@ -44,8 +44,6 @@ struct DisplayContext {
   bin_starts : Array[Int32]
   bin_ends : Array[Int32]
   is_grid : Array[Bool]
-  grid_bars : Array[Int32]
-  freq_labels : Array[Int32]
   color_table : Array[String]
   row_contrib : Array[Double]
   height_factor : Double
@@ -53,6 +51,9 @@ struct DisplayContext {
   fft_size : Int32
   separator_colors : Array[String]
   meter_colors : Array[String]
+  label_strings : Array[String]
+  db_scale_labels : Array[String]
+  waveform_colors : Array[String]
 }
 
 ///|
@@ -456,6 +457,63 @@ fn create_display_context(
     let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
     meter_colors[i] = "\u001b[38;2;\{r};\{g};\{b}m"
   }
+  // Precompute frequency label strings — eliminates per-frame nested loop
+  // and format_freq calls. label_strings[bar] = colored label or ""
+  let label_strings = Array::make(num_bars, "")
+  for j in 0..<grid_bars.length() {
+    let gb = grid_bars[j]
+    if gb >= 0 && gb < num_bars {
+      let hz = freq_labels[j]
+      let label = if hz >= 1000 { "\{hz / 1000}kHz" } else { "\{hz}Hz" }
+      // Color from color_table at brightness level 18
+      let bar_off = gb * num_brightness_levels
+      label_strings[gb] = color_table[bar_off + 18] + label + ansi_reset
+    }
+  }
+  // Precompute dB scale labels — eliminates per-frame hsl_to_rgb calls
+  let db_scale_labels = Array::make(max_height, "")
+  for row in 0..<max_height {
+    let label_row = row * 5 / max_height
+    if label_row < 5 {
+      let hue = 260.0 - label_row.to_double() * 52.0
+      let (r, g, b) = hsl_to_rgb(hue, 0.3, 0.6)
+      let labels = [" 0dB", "-6dB", "-12dB", "-18dB", "-24dB"]
+      db_scale_labels[row] = "\u001b[38;2;\{r};\{g};\{b}m" +
+        labels[label_row] +
+        ansi_reset +
+        " "
+    } else {
+      db_scale_labels[row] = "\u001b[38;2;70;70;90m│" + ansi_reset + " "
+    }
+  }
+  // Precompute waveform color table — 9 scaled values × 256 amplitude levels
+  // Index: (scaled + 4) * 256 + amp_int. Eliminates per-frame string interpolation.
+  // Beat cases (scaled 3|4, -3|-4) store non-beat colors; beat override is rare.
+  let wf_tbl = Array::make(9 * 256, "")
+  for amp in 0..<256 {
+    // scaled 0: fixed dim color
+    wf_tbl[4 * 256 + amp] = "\u001b[38;2;60;70;90m─\u001b[0m"
+    // scaled 1: g = 180 + amp/4
+    let g1 = 180 + amp / 4
+    wf_tbl[5 * 256 + amp] = "\u001b[38;2;80;\{g1};200m▔\u001b[0m"
+    // scaled 2: g = 200 + amp/5
+    let g2 = 200 + amp / 5
+    wf_tbl[6 * 256 + amp] = "\u001b[38;2;60;\{g2};180m▀\u001b[0m"
+    // scaled 3|4 non-beat: g = 220 + amp/6
+    let g3 = 220 + amp / 6
+    wf_tbl[7 * 256 + amp] = "\u001b[38;2;100;\{g3};120m█\u001b[0m"
+    wf_tbl[8 * 256 + amp] = wf_tbl[7 * 256 + amp]
+    // scaled -1: b = 180 + amp/4
+    let b1 = 180 + amp / 4
+    wf_tbl[3 * 256 + amp] = "\u001b[38;2;80;150;\{b1}m▁\u001b[0m"
+    // scaled -2: b = 200 + amp/5
+    let b2 = 200 + amp / 5
+    wf_tbl[2 * 256 + amp] = "\u001b[38;2;100;120;\{b2}m▄\u001b[0m"
+    // scaled -3|-4 non-beat: b = 220 + amp/6
+    let b3 = 220 + amp / 6
+    wf_tbl[1 * 256 + amp] = "\u001b[38;2;120;150;\{b3}m█\u001b[0m"
+    wf_tbl[0 * 256 + amp] = wf_tbl[1 * 256 + amp]
+  }
   DisplayContext::{
     num_bars,
     max_height,
@@ -465,8 +523,6 @@ fn create_display_context(
     bin_starts,
     bin_ends,
     is_grid,
-    grid_bars,
-    freq_labels,
     color_table,
     row_contrib,
     height_factor,
@@ -474,6 +530,9 @@ fn create_display_context(
     fft_size,
     separator_colors,
     meter_colors,
+    label_strings,
+    db_scale_labels,
+    waveform_colors: wf_tbl,
   }
 }
 
@@ -545,28 +604,6 @@ fn bar_state(
 }
 
 ///|
-fn render_db_scale(sb : StringBuilder, row : Int32, max_height : Int32) -> Unit {
-  let db_labels : Array[String] = [" 0dB", "-12", "-24", "-36", "-48"]
-  let label_row = (row * (db_labels.length() - 1) / max_height).clamp(
-    min=0,
-    max=db_labels.length() - 1,
-  )
-  let expected_row = label_row * max_height / (db_labels.length() - 1)
-  if row == expected_row {
-    // Warm-to-cool gradient: 0dB=warm white, -48dB=cool blue
-    let hue = 200.0 *
-      label_row.to_double() /
-      (db_labels.length() - 1).to_double()
-    let (r, g, b) = hsl_to_rgb(hue, 0.3, 0.6)
-    sb.write_string("\u001b[38;2;\{r};\{g};\{b}m")
-    sb.write_string(db_labels[label_row])
-    sb.write_string("\u001b[0m ")
-  } else {
-    sb.write_string("\u001b[38;2;70;70;90m│\u001b[0m ")
-  }
-}
-
-///|
 fn is_ref_line(row : Int32, max_height : Int32) -> Bool {
   row == 1 * max_height / 4
 }
@@ -578,6 +615,7 @@ fn render_waveform(
   waveform : Array[Double],
   width : Int32,
   beat_intensity : Double,
+  wf_colors : Array[String],
 ) -> Unit {
   sb.write_string("\u001b[90m  WV \u001b[0m")
   let n = waveform.length()
@@ -586,47 +624,26 @@ fn render_waveform(
     return
   }
   let step = n.to_double() / width.to_double()
+  let has_beat = beat_intensity > 0.3
   for i in 0..<width {
     let sample_idx = (i.to_double() * step).to_int().clamp(min=0, max=n - 1)
     let sample = waveform[sample_idx]
     let scaled = (sample * 4.0).clamp(min=-4.0, max=4.0).to_int()
     let abs_amp = sample.abs().clamp(min=0.0, max=1.0)
-    let amp_int = (abs_amp * 255.0).to_int()
-    match scaled {
-      0 => sb.write_string("\u001b[38;2;60;70;90m─\u001b[0m")
-      1 => {
-        let g = 180 + amp_int / 4
-        sb.write_string("\u001b[38;2;80;\{g};200m▔\u001b[0m")
+    let amp_int = (abs_amp * 255.0).to_int().clamp(min=0, max=255)
+    // Precomputed table: index = (scaled + 4) * 256 + amp_int
+    let tbl_idx = (scaled + 4) * 256 + amp_int
+    // Beat override for high-amplitude bars (rare path)
+    if has_beat && (scaled >= 3 || scaled <= -3) {
+      if scaled >= 3 {
+        let r = 200 + (beat_intensity * 55.0).to_int()
+        sb.write_string("\u001b[38;2;\{r};255;100m█\u001b[0m")
+      } else {
+        let r = 100 + (beat_intensity * 155.0).to_int()
+        sb.write_string("\u001b[38;2;\{r};150;255m█\u001b[0m")
       }
-      2 => {
-        let g = 200 + amp_int / 5
-        sb.write_string("\u001b[38;2;60;\{g};180m▀\u001b[0m")
-      }
-      3 | 4 =>
-        if beat_intensity > 0.3 {
-          let r = 200 + (beat_intensity * 55.0).to_int()
-          sb.write_string("\u001b[38;2;\{r};255;100m█\u001b[0m")
-        } else {
-          let g = 220 + amp_int / 6
-          sb.write_string("\u001b[38;2;100;\{g};120m█\u001b[0m")
-        }
-      -1 => {
-        let b = 180 + amp_int / 4
-        sb.write_string("\u001b[38;2;80;150;\{b}m▁\u001b[0m")
-      }
-      -2 => {
-        let b = 200 + amp_int / 5
-        sb.write_string("\u001b[38;2;100;120;\{b}m▄\u001b[0m")
-      }
-      -3 | -4 =>
-        if beat_intensity > 0.3 {
-          let r = 100 + (beat_intensity * 155.0).to_int()
-          sb.write_string("\u001b[38;2;\{r};150;255m█\u001b[0m")
-        } else {
-          let b = 220 + amp_int / 6
-          sb.write_string("\u001b[38;2;120;150;\{b}m█\u001b[0m")
-        }
-      _ => sb.write_string("\u001b[38;2;60;70;90m─\u001b[0m")
+    } else {
+      sb.write_string(wf_colors.unsafe_get(tbl_idx))
     }
   }
   sb.write_string("\n")
@@ -821,7 +838,7 @@ fn render_spectrum(
 
   // --- Render bars with precomputed color table (continuous, no gaps) ---
   for row in 0..<max_height {
-    render_db_scale(sb, row, max_height)
+    sb.write_string(ctx.db_scale_labels.unsafe_get(row))
     let level_top = (max_height - row) * sub_res
     let level_bottom = (max_height - row - 1) * sub_res
     let ref_line = is_ref_line(row, max_height)
@@ -910,32 +927,26 @@ fn render_spectrum(
     sb.write_string("\n")
   }
 
-  // --- Frequency labels ---
+  // --- Frequency labels (precomputed text) ---
   sb.write_string("     ")
   let mut label_pos = 0
   for i in 0..<num_bars {
-    let mut found_label = ""
-    for j in 0..<ctx.freq_labels.length() {
-      if ctx.grid_bars[j] == i {
-        found_label = format_freq(ctx.freq_labels[j])
-        break
-      }
-    }
-    if found_label.length() > 0 {
+    let label = ctx.label_strings.unsafe_get(i)
+    if label.length() > 0 {
       while label_pos < i {
         sb.write_string(" ")
         label_pos = label_pos + 1
       }
       sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 18))
-      sb.write_string(found_label)
-      sb.write_string("\u001b[0m")
-      label_pos = i + found_label.length()
+      sb.write_string(label)
+      sb.write_string(ansi_reset)
+      label_pos = i + label.length()
     }
   }
   sb.write_string("\n")
 
   // --- Waveform strip ---
-  render_waveform(sb, waveform, num_bars, beat_intensity)
+  render_waveform(sb, waveform, num_bars, beat_intensity, ctx.waveform_colors)
 
   // --- Energy history sparkline (MoonBit `mut` circular buffer) ---
   render_energy_sparkline(sb, sparkline, num_bars)
