@@ -34,9 +34,18 @@ async fn main {
   let args = @env.args()
   match args.length() {
     n if n < 2 => {
+      println("🎵 moonFFTmusic — Real-time Spectrum Analyzer")
+      println("")
       println("Usage: moonFFTmusic <wav_file> [fft_size]")
       println("  wav_file:  path to WAV file (16-bit PCM)")
       println("  fft_size:  FFT window size, power of 2 (default: 1024)")
+      println("")
+      println("Environment:")
+      println("  LINES:     terminal height for auto-layout (default: 26)")
+      println("")
+      println("Visual effects: rainbow flow, mirror reflection, beat flash,")
+      println("  beat bloom, bar crown, scanline, dominant spotlight,")
+      println("  progress pulse, RMS glow")
       return
     }
     _ => ()
