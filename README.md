@@ -9,6 +9,8 @@ A real-time audio spectrum visualizer written in [MoonBit](https://www.moonbitla
 It reads a WAV file, performs Fast Fourier Transform (FFT) on audio chunks, and
 displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal.
 
+![Spectrum Analyzer Screenshot](docs/screenshot.png)
+
 ## Features
 
 ### Audio Engine (CPU-Optimized)
@@ -27,7 +29,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 - **Pre-allocated FFT Buffers**: `re[]` and `im[]` arrays are allocated once and
   reused across all frames — zero per-frame array allocations.
 
-### Visual Display (18 enhancements)
+### Visual Display (21 enhancements)
 
 | # | Feature | Description |
 |---|---------|-------------|
@@ -62,6 +64,27 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | Frequency labels | O(n²) string concatenation | StringBuilder | Linear-time label rendering |
 | Spatial smoothing | Temp array allocation per frame | In-place rolling buffer | Zero per-frame array allocs |
 | FFT buffers | Allocated per frame | Pre-allocated, reused | Zero per-frame array allocs |
+| Color table | `Array[Array[String]]` (2D, double indirection) | Flat `Array[String]` with `bar*nbl+level` index | One array access vs two per bar per row |
+| Height processing | 4 separate loops over num_bars | 2 fused loops (height+envelope, smoothing+peak) | Halves loop overhead |
+| Row invariants | `row_contrib[row]` + `beat_boost` recomputed per bar | Hoisted as `row_base` per row | Eliminates 1560 redundant additions/frame |
+| Bar offset | `bar * num_brightness_levels` per bar per row | Precomputed `bar_offsets[]` array | Eliminates 1560 multiplications/frame |
+| Color table access | Safe `ctx.color_table[bar][level]` | `color_tbl.unsafe_get(bar_off + level)` | Bypasses bounds check in hot path |
+| Bin aggregation | Safe `ctx.bin_starts[bar]` access | `unsafe_get` + local reference | Bypasses bounds check |
+| Waveform fill | Safe array access | `unsafe_set`/`unsafe_get` | Bypasses bounds check |
+| Total time string | `format_time(total, rate)` per frame | Precomputed once at startup | Eliminates string formatting per frame |
+| Frequency label text | O(60×8) nested loop + `format_freq` per frame | Precomputed `label_strings[]` array | Eliminates 480 iterations + string formatting/frame |
+| dB scale labels | `hsl_to_rgb` per row per frame | Precomputed `db_scale_labels[]` array | Eliminates 20 `hsl_to_rgb` calls/frame |
+| Waveform colors | String interpolation per bar per frame | Precomputed 9×256=2304 color table | Eliminates 60 string interpolations/frame |
+| Sparkline colors | String interpolation per bar per frame | Precomputed 4×8=32 color table | Eliminates 60 string interpolations/frame |
+| `bar_offsets` array | `Array::makei` per frame | Precomputed in `DisplayContext` | Eliminates 1 array allocation/frame |
+| `bar_fade` array | `Array::make` per frame | Reusable field in `PeakTrail` | Eliminates 1 array allocation/frame |
+| Height double conversion | `to_double()` × `height_factor` per bar per row | Precomputed `heights_d[]` before row loop | Eliminates 2400 `to_double`+multiply/frame |
+| IIR anti-flicker state | `Array[Int32]` (integer IIR can't eliminate ±1 oscillation) | `Array[Double]` (float IIR before quantization) | Eliminates residual ±1 flicker |
+| Dominant bar marker | Raw `dominant_bar` recomputed per frame | Sticky `dom_bar` passed from `main.mbt` | Eliminates ▼ marker jumping |
+| Rainbow hue rotation | `rotate_hue()` 1920 string allocs/frame | Precomputed 40 color tables, swap index | Zero per-frame string allocs |
+| `heights_d`/`peak_heights_d` | `Array::make` per frame | Pre-allocated in `DisplayContext` | Eliminates 120 Double allocs/frame |
+| Terminal height | Fixed `max_height=26` (45 lines/frame) | Auto-detect `LINES` env var | Eliminates scroll flicker on small terminals |
+| Layout compaction | 45 lines/frame (header+sep+26 bars+5 glow+...) | 30 lines/frame (removed sep, glow 5→3) | Fits 30-line terminals |
 
 ## How to Run
 
@@ -163,9 +186,33 @@ RMS: [████████████████░░░░] -6.0 dB
 ║║║║║║║║║║║║║║║║║║║║║║║║║║▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 44%  0:0.2 / 0:0.5
 ```
 
-Bars use smooth 24-bit true-color RGB gradient (blue → cyan → green → yellow → red).
-The header border glows warm orange on detected beats. The `WV` line shows the
-time-domain waveform. Press `Ctrl+C` to stop.
+Bars use smooth 24-bit true-color RGB gradient with **rainbow hue rotation** —
+the entire color spectrum flows and shifts over time like an aurora.
+The header border **flashes white-yellow** on strong beats (═ → ━).
+Below the main bars, a **mirror reflection** shows inverted bars with fading
+brightness, creating a 3D water-reflection depth illusion.
+The `WV` line shows the time-domain waveform; `EN` shows energy history sparkline.
+Terminal height is **auto-detected** via `LINES` env var — the display adapts
+to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
+
+### Visual Effects (14 dynamic effects)
+
+| Effect | Description |
+|--------|-------------|
+| 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
+| ⚡ Beat flash border | Strong beats: white-yellow border + `═`→`━` thickness change |
+| 💥 Beat bloom | `beat_boost` ×10: all bars flash brighter on beats |
+| 👑 Bar top crown | Bar caps get +8 brightness — glowing crown effect |
+| 📡 Scanline | A +2 brightness row sweeps up/down across spectrum |
+| 🔦 Dominant spotlight | Main frequency bar +5, neighbors +2 on beats |
+| 📊 Progress pulse | Progress bar brightness pulses with beat intensity |
+| 🎚️ RMS beat glow | RMS label turns yellow on strong beats |
+| 🌊 Spectrogram waterfall | 3-row scrolling history with blue→red color map (replaces mirror) |
+| 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted ▼ |
+| 🎵 BPM estimation | Beat timing analysis with ♥/♡ indicator and BPM display in header |
+| 🔊 Frequency band meters | BASS/MID/TREBLE 10-cell horizontal energy meters |
+| 🎛️ Auto-gain control | Dynamic sensitivity adjustment for quiet/loud sections |
+| 🎶 Note detection | Real-time MIDI note name (e.g. G4+) with cents deviation |
 
 ## MoonBit Language Features
 

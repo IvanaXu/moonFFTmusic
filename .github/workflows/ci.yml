@@ -8,7 +8,7 @@
 #   2. moon check   — type check, deny warnings
 #   3. moon fmt      — format check, fail if diff
 #   4. moon build    — native compilation
-#   5. moon test     — run 21 inline test blocks
+#   5. moon test     — run 25 inline test blocks
 #   6. Integration   — generate WAV, run visualizer, verify output
 # =============================================================================
 
@@ -16,9 +16,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, dev]
 
 # Cancel superseded runs for the same branch/PR
 concurrency:

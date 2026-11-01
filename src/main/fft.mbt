@@ -158,11 +158,18 @@ fn precompute_hann_window(n : Int32) -> Array[Double] {
 }
 
 ///|
-fn apply_hann_window_soa(re : Array[Double], hann : Array[Double]) -> Unit {
-  let n = re.length()
+fn precompute_bit_reversal(n : Int32, bits : Int32) -> Array[Int32] {
+  let table = Array::make(n, 0)
   for i in 0..<n {
-    re.unsafe_set(i, re.unsafe_get(i) * hann.unsafe_get(i))
+    let mut result : Int32 = 0
+    let mut x = i
+    for _ in 0..<bits {
+      result = (result << 1) | (x & 1)
+      x = x >> 1
+    }
+    table[i] = result
   }
+  table
 }
 
 ///|
@@ -171,14 +178,14 @@ fn fft_soa(
   im : Array[Double],
   tw_re : Array[Double],
   tw_im : Array[Double],
-  bits : Int32,
+  bit_rev : Array[Int32],
 ) -> Unit {
   let n = re.length()
   if n <= 1 {
     return
   }
   for i in 0..<n {
-    let j = bit_reverse(i, bits)
+    let j = bit_rev.unsafe_get(i)
     if j > i {
       let tr = re.unsafe_get(i)
       let ti = im.unsafe_get(i)
@@ -306,7 +313,8 @@ test "SoA FFT matches Complex FFT on DC signal" {
   let (tw_re, tw_im) = precompute_twiddles_soa(n)
   let re = Array::make(n, 1.0)
   let im = Array::make(n, 0.0)
-  fft_soa(re, im, tw_re, tw_im, bits)
+  let bit_rev = precompute_bit_reversal(n, bits)
+  fft_soa(re, im, tw_re, tw_im, bit_rev)
   let mag0 = (re[0] * re[0] + im[0] * im[0]).sqrt()
   assert_true(mag0 > 7.9)
   for i in 1..<n {
@@ -325,7 +333,8 @@ test "SoA FFT matches Complex FFT on sine wave" {
     @math.sin(2.0 * @math.PI * freq.to_double() * i.to_double() / n.to_double())
   })
   let im_soa = Array::make(n, 0.0)
-  fft_soa(re_soa, im_soa, tw_re, tw_im, bits)
+  let bit_rev = precompute_bit_reversal(n, bits)
+  fft_soa(re_soa, im_soa, tw_re, tw_im, bit_rev)
   let mag_f = (re_soa[freq] * re_soa[freq] + im_soa[freq] * im_soa[freq]).sqrt()
   let mag_nf = (re_soa[n - freq] * re_soa[n - freq] +
   im_soa[n - freq] * im_soa[n - freq]).sqrt()
