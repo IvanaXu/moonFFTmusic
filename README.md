@@ -210,6 +210,7 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 | 🌊 Spectrogram waterfall | 3-row scrolling history; per-frequency hue (matches bars) with intensity brightness |
 | 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted ▼ |
 | 🎵 BPM estimation | Beat timing analysis with ♥/♡ indicator and BPM display in header |
+| 🥁 Rhythm indicator | 4-step beat marker advancing with each detected beat |
 | 🔊 Frequency band meters | BASS/MID/TREBLE 10-cell horizontal energy meters |
 | 🎛️ Auto-gain control | Dynamic sensitivity adjustment for quiet/loud sections |
 | 🎶 Note detection | Real-time MIDI note name (e.g. G4+) with cents deviation |

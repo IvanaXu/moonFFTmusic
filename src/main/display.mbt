@@ -161,6 +161,8 @@ struct BeatDetector {
   mut last_beat_time : Double
   mut bpm : Double
   mut beat_pulse : Double
+  // Total detected beats — drives the 4-step rhythm indicator
+  mut beat_count : Int32
 }
 
 ///|
@@ -178,6 +180,7 @@ fn BeatDetector::new(history_size : Int32) -> BeatDetector {
     last_beat_time: 0.0,
     bpm: 0.0,
     beat_pulse: 0.0,
+    beat_count: 0,
   }
 }
 
@@ -233,6 +236,7 @@ fn BeatDetector::update(
     }
     self.last_beat_time = current_time
     self.beat_pulse = 1.0
+    self.beat_count = self.beat_count + 1
   } else {
     self.beat_intensity *= 0.92
     // Sharper pulse decay (~0.25 s) so beat flashes read as crisp hits that
@@ -462,6 +466,7 @@ fn render_piano_keyboard(
   sb : StringBuilder,
   dom_midi : Int32,
   beat_pulse : Double,
+  beat_count : Int32,
 ) -> Unit {
   // 2 octaves starting from MIDI 48 (C3)
   let start_midi = 48
@@ -488,6 +493,23 @@ fn render_piano_keyboard(
     sb.write_string(" \u001b[1;31m\u{2665}\u001b[0m")
   } else {
     sb.write_string(" \u001b[90m\u{2661}\u001b[0m")
+  }
+  // 4-step rhythm indicator: the lit cell advances with each detected beat so
+  // tempo reads as motion, and it flares on the beat pulse.
+  if beat_count > 0 {
+    sb.write_string("  ")
+    let step = beat_count % 4
+    for i in 0..<4 {
+      if i == step {
+        if beat_pulse > 0.5 {
+          sb.write_string("\u001b[1;31m\u{25CF}\u001b[0m")
+        } else {
+          sb.write_string("\u001b[31m\u{25CF}\u001b[0m")
+        }
+      } else {
+        sb.write_string("\u001b[90m\u{25CB}\u001b[0m")
+      }
+    }
   }
   sb.write_string("\n")
 }
@@ -892,6 +914,7 @@ fn render_spectrum(
   dom_bar : Int32,
   bpm : Double,
   beat_pulse : Double,
+  beat_count : Int32,
 ) -> String {
   let sb = StringBuilder::StringBuilder()
   let num_bars = ctx.num_bars
@@ -1124,7 +1147,7 @@ fn render_spectrum(
   } else {
     -1
   }
-  render_piano_keyboard(sb, dom_midi, beat_pulse)
+  render_piano_keyboard(sb, dom_midi, beat_pulse, beat_count)
 
   // --- Render bars with precomputed color table (continuous, no gaps) ---
   // Precompute heights[bar] * height_factor once — avoids to_double + multiply

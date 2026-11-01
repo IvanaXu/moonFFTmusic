@@ -279,6 +279,7 @@ async fn main {
       dom_bar,
       beat_detector.bpm,
       beat_detector.beat_pulse,
+      beat_detector.beat_count,
     )
     println(display)
 
