@@ -54,6 +54,7 @@ struct DisplayContext {
   label_strings : Array[String]
   db_scale_labels : Array[String]
   waveform_colors : Array[String]
+  bar_offsets : Array[Int32]
 }
 
 ///|
@@ -133,6 +134,23 @@ let sparkline_chars : Array[String] = [
 ]
 
 ///|
+
+///|
+let sparkline_colors : Array[String] = [
+  "\u001b[38;2;255;80;40m", "\u001b[38;2;255;90;40m", "\u001b[38;2;255;100;40m",
+  "\u001b[38;2;255;110;40m", "\u001b[38;2;255;120;40m", "\u001b[38;2;255;130;40m",
+  "\u001b[38;2;255;140;40m", "\u001b[38;2;255;150;40m", "\u001b[38;2;255;180;40m",
+  "\u001b[38;2;255;180;50m", "\u001b[38;2;255;180;60m", "\u001b[38;2;255;180;70m",
+  "\u001b[38;2;255;180;80m", "\u001b[38;2;255;180;90m", "\u001b[38;2;255;180;100m",
+  "\u001b[38;2;255;180;110m", "\u001b[38;2;80;220;80m", "\u001b[38;2;100;220;80m",
+  "\u001b[38;2;120;220;80m", "\u001b[38;2;140;220;80m", "\u001b[38;2;160;220;80m",
+  "\u001b[38;2;180;220;80m", "\u001b[38;2;200;220;80m", "\u001b[38;2;220;220;80m",
+  "\u001b[38;2;40;100;200m", "\u001b[38;2;40;115;200m", "\u001b[38;2;40;130;200m",
+  "\u001b[38;2;40;145;200m", "\u001b[38;2;40;160;200m", "\u001b[38;2;40;175;200m",
+  "\u001b[38;2;40;190;200m", "\u001b[38;2;40;205;200m",
+]
+
+///|
 /// Render energy sparkline as a compact one-line graph.
 /// Uses MoonBit `match` for color zone selection and `Array::unsafe_get` for hot path.
 fn render_energy_sparkline(
@@ -151,15 +169,18 @@ fn render_energy_sparkline(
     n).clamp(min=0, max=n - 1)
     let energy = hist.unsafe_get(buf_idx)
     let ratio = (energy / max_e).clamp(min=0.0, max=1.0)
-    // MoonBit `match` with guard patterns for color zone selection
+    // Precomputed color table: 4 zones × 8 char_idx = 32 entries
     let char_idx = (ratio * 7.0).to_int().clamp(min=0, max=7)
-    let (r, g, b) = match ratio {
-      rr if rr > 0.75 => (255, 80 + char_idx * 10, 40) // hot zone — red/orange
-      rr if rr > 0.5 => (255, 180, 40 + char_idx * 10) // warm zone — yellow
-      rr if rr > 0.25 => (80 + char_idx * 20, 220, 80) // mid zone — green
-      _ => (40, 100 + char_idx * 15, 200) // cool zone — blue
+    let zone = if ratio > 0.75 {
+      0
+    } else if ratio > 0.5 {
+      1
+    } else if ratio > 0.25 {
+      2
+    } else {
+      3
     }
-    sb.write_string("\u001b[38;2;\{r};\{g};\{b}m")
+    sb.write_string(sparkline_colors.unsafe_get(zone * 8 + char_idx))
     sb.write_string(sparkline_chars.unsafe_get(char_idx))
   }
   sb.write_string("\u001b[0m\n")
@@ -172,6 +193,7 @@ struct PeakTrail {
   history : Array[Int32] // bar positions (-1 = no peak)
   mut idx : Int32
   size : Int32
+  bar_fade : Array[Int32] // reusable per-bar fade levels (avoids per-frame alloc)
 }
 
 ///|
@@ -185,7 +207,12 @@ enum TrailFade {
 
 ///|
 fn PeakTrail::new(size : Int32) -> PeakTrail {
-  PeakTrail::{ history: Array::make(size, -1), idx: 0, size, }
+  PeakTrail::{
+    history: Array::make(size, -1),
+    idx: 0,
+    size,
+    bar_fade: Array::make(size, 4), // 4 = Gone (default)
+  }
 }
 
 ///|
@@ -218,8 +245,11 @@ fn render_peak_trail(
   bar_offsets : Array[Int32],
 ) -> Unit {
   sb.write_string("\u001b[90m     \u001b[0m")
-  // Build a per-bar fade level array (most recent wins on collision)
-  let bar_fade = Array::make(num_bars, 4) // 4 = Gone
+  // Reuse trail.bar_fade — reset to 4 (Gone) then fill
+  let bar_fade = trail.bar_fade
+  for i in 0..<num_bars {
+    bar_fade.unsafe_set(i, 4)
+  }
   let n = trail.size
   let hist = trail.history
   for age in 0..<n {
@@ -514,6 +544,10 @@ fn create_display_context(
     wf_tbl[1 * 256 + amp] = "\u001b[38;2;120;150;\{b3}m█\u001b[0m"
     wf_tbl[0 * 256 + amp] = wf_tbl[1 * 256 + amp]
   }
+  // Precompute bar offsets — eliminates per-frame Array::makei allocation
+  let pre_bar_offsets = Array::makei(num_bars, fn(bar) {
+    bar * num_brightness_levels
+  })
   DisplayContext::{
     num_bars,
     max_height,
@@ -533,6 +567,7 @@ fn create_display_context(
     label_strings,
     db_scale_labels,
     waveform_colors: wf_tbl,
+    bar_offsets: pre_bar_offsets,
   }
 }
 
@@ -793,11 +828,10 @@ fn render_spectrum(
 
   // --- Hoist loop-invariant values for all rendering sections below ---
   let height_factor = ctx.height_factor
-  let nbl = num_brightness_levels
   let nbl_minus_1 = num_brightness_levels - 1
   let color_tbl = ctx.color_table
   // Precompute bar * nbl offsets once (avoids multiplication per bar per row)
-  let bar_offsets = Array::makei(num_bars, fn(bar) { bar * nbl })
+  let bar_offsets = ctx.bar_offsets
 
   // --- Peak marker row with bar top connectors (MoonBit `match` dispatch) ---
   sb.write_string("\u001b[90m     \u001b[0m")
