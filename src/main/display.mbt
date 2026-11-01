@@ -26,6 +26,78 @@ let ansi_clear : String = "\u001b[2J\u001b[H"
 let ansi_reset : String = "\u001b[0m"
 
 ///|
+/// Terminal display width of a single character (0, 1 or 2 columns).
+/// Handles combining marks (0), East-Asian wide/fullwidth and emoji (2).
+fn char_display_width(c : Char) -> Int32 {
+  let cp = c.to_int()
+  if cp == 0 {
+    return 0
+  }
+  // Zero-width: combining marks and format characters
+  if (cp >= 0x300 && cp <= 0x36F) ||
+    (cp >= 0x1AB0 && cp <= 0x1AFF) ||
+    (cp >= 0x1DC0 && cp <= 0x1DFF) ||
+    (cp >= 0x200B && cp <= 0x200F) ||
+    (cp >= 0xFE00 && cp <= 0xFE0F) {
+    return 0
+  }
+  // Double-width: CJK, Hangul, fullwidth forms and emoji
+  if (cp >= 0x1100 && cp <= 0x115F) ||
+    (cp >= 0x2E80 && cp <= 0x2EFF) ||
+    (cp >= 0x3000 && cp <= 0x303E) ||
+    (cp >= 0x3041 && cp <= 0x33FF) ||
+    (cp >= 0x3400 && cp <= 0x4DBF) ||
+    (cp >= 0x4E00 && cp <= 0x9FFF) ||
+    (cp >= 0xA000 && cp <= 0xA4CF) ||
+    (cp >= 0xAC00 && cp <= 0xD7A3) ||
+    (cp >= 0xF900 && cp <= 0xFAFF) ||
+    (cp >= 0xFE30 && cp <= 0xFE4F) ||
+    (cp >= 0xFF00 && cp <= 0xFF60) ||
+    (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+    (cp >= 0x1F300 && cp <= 0x1FAFF) ||
+    (cp >= 0x20000 && cp <= 0x3FFFD) {
+    return 2
+  }
+  1
+}
+
+///|
+/// Terminal display width of a string (sum of per-character widths).
+/// Must be used instead of `String::length()` whenever the text may contain
+/// emoji / wide characters, otherwise ANSI-framed layouts become misaligned.
+fn display_width(s : String) -> Int32 {
+  let mut w = 0
+  for c in s {
+    w += char_display_width(c)
+  }
+  w
+}
+
+///|
+/// Truncate a string to at most `max_w` display columns, appending an ellipsis
+/// when content is dropped. Ensures framed rows never overflow their border.
+fn truncate_to_width(s : String, max_w : Int32) -> String {
+  if display_width(s) <= max_w {
+    return s
+  }
+  let limit = if max_w > 1 { max_w - 1 } else { max_w }
+  let mut out = ""
+  let mut w = 0
+  for c in s {
+    let cw = char_display_width(c)
+    if w + cw > limit {
+      break
+    }
+    out = out + "\{c}"
+    w += cw
+  }
+  if max_w > 1 {
+    out = out + "…"
+  }
+  out
+}
+
+///|
 let note_names : Array[String] = [
   "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ]
@@ -324,7 +396,7 @@ fn render_piano_keyboard(
   // 2 octaves starting from MIDI 48 (C3)
   let start_midi = 48
   let num_keys = 24
-  sb.write_string("\u001b[90m  \u001b[35m\u{1F3B9}\u001b[0m ")
+  sb.write_string("\u001b[90m   \u001b[35m\u{1F3B9}\u001b[0m ")
   for i in 0..<num_keys {
     let midi = start_midi + i
     let is_black = piano_key_is_black(i)
@@ -382,6 +454,7 @@ fn render_band_meters(
   }
   // Normalize and render 10-cell meters
   let bands = [("BASS", bass_max), ("MID ", mid_max), ("TREB", treble_max)]
+  sb.write_string("\u001b[90m      \u001b[0m")
   for band_idx in 0..<3 {
     let (label, max_val) = bands[band_idx]
     sb.write_string("\u001b[90m\{label} \u001b[0m")
@@ -460,32 +533,38 @@ fn create_display_context(
     meter_colors[i] = "\u001b[38;2;\{r};\{g};\{b}m"
   }
   // Precompute frequency label strings — eliminates per-frame nested loop
-  // and format_freq calls. label_strings[bar] = colored label or ""
+  // and format_freq calls. label_strings[bar] holds PLAIN text only: ANSI
+  // codes must never be stored here because their length would be mistaken
+  // for display width when positioning the next label (which glued all
+  // labels together into "50Hz100Hz200Hz...").
   let label_strings = Array::make(num_bars, "")
   for j in 0..<grid_bars.length() {
     let gb = grid_bars[j]
     if gb >= 0 && gb < num_bars {
       let hz = freq_labels[j]
-      let label = if hz >= 1000 { "\{hz / 1000}kHz" } else { "\{hz}Hz" }
-      // Color from color_table at brightness level 18
-      let bar_off = gb * num_brightness_levels
-      label_strings[gb] = color_tables[0][bar_off + 18] + label + ansi_reset
+      label_strings[gb] = if hz >= 1000 { "\{hz / 1000}kHz" } else { "\{hz}Hz" }
     }
   }
-  // Precompute dB scale labels — eliminates per-frame hsl_to_rgb calls
+  // Precompute dB scale labels — eliminates per-frame hsl_to_rgb calls.
+  // Labels are all exactly 5 columns wide so every spectrum row starts at the
+  // same left column (a width mismatch used to shift -12dB rows by 1 column).
+  // Each tick is emitted only once (a naive row*5/height repeats ticks,
+  // producing e.g. three identical "0dB" labels in a 12-row display).
   let db_scale_labels = Array::make(max_height, "")
+  let labels = ["  0dB", " -6dB", "-12dB", "-18dB", "-24dB"]
+  let mut prev_label_row = -1
   for row in 0..<max_height {
     let label_row = row * 5 / max_height
-    if label_row < 5 {
+    if label_row < 5 && label_row != prev_label_row {
+      prev_label_row = label_row
       let hue = 260.0 - label_row.to_double() * 52.0
       let (r, g, b) = hsl_to_rgb(hue, 0.3, 0.6)
-      let labels = [" 0dB", "-6dB", "-12dB", "-18dB", "-24dB"]
       db_scale_labels[row] = "\u001b[38;2;\{r};\{g};\{b}m" +
         labels[label_row] +
         ansi_reset +
         " "
     } else {
-      db_scale_labels[row] = "\u001b[38;2;70;70;90m│" + ansi_reset + " "
+      db_scale_labels[row] = "\u001b[38;2;70;70;90m│    \u001b[0m "
     }
   }
   // Precompute waveform color table — 9 scaled values × 256 amplitude levels
@@ -643,7 +722,7 @@ fn render_waveform(
   beat_intensity : Double,
   wf_colors : Array[String],
 ) -> Unit {
-  sb.write_string("\u001b[90m  WV \u001b[0m")
+  sb.write_string("\u001b[90m   WV \u001b[0m")
   let n = waveform.length()
   if n == 0 {
     sb.write_string("\n")
@@ -825,11 +904,18 @@ fn render_spectrum(
   }
 
   // --- Header ---
+  // Inner width matches the spectrum area: 6-col left gutter + num_bars columns
   let header_width = num_bars + 6
-  let title = "🎵 MoonFFTmusic — Real-time Spectrum Analyzer"
+  let text_width = header_width - 2
+  let title = truncate_to_width(
+    "🎵 MoonFFTmusic — Real-time Spectrum Analyzer", text_width,
+  )
   let beat_indicator = if beat_intensity > 0.5 { " ♫" } else { "  " }
-  let bpm_str = if bpm > 0.0 { " | BPM: \{bpm.to_int()}" } else { "" }
-  let info_line = "Rate: \{sample_rate}Hz | FFT: \{fft_size} | Bars: \{num_bars} | Peak: \{format_freq(dominant_freq_int)} (\{note_name})\{beat_indicator}\{bpm_str} | \{format_time(current_pos, sample_rate)}"
+  let bpm_str = if bpm > 0.0 { " | \{bpm.to_int()} BPM" } else { "" }
+  let info_line = truncate_to_width(
+    "\{sample_rate}Hz | FFT \{fft_size} | Peak \{format_freq(dominant_freq_int)} (\{note_name})\{beat_indicator}\{bpm_str} | \{format_time(current_pos, sample_rate)}",
+    text_width,
+  )
 
   sb.write_string(beat_glow)
   sb.write_string("╔")
@@ -838,7 +924,7 @@ fn render_spectrum(
   }
   sb.write_string("╗\n║ ")
   sb.write_string(title)
-  let title_pad = (header_width - title.length() - 2).clamp(
+  let title_pad = (text_width - display_width(title)).clamp(
     min=0,
     max=header_width,
   )
@@ -847,7 +933,7 @@ fn render_spectrum(
   }
   sb.write_string(" ║\n║ ")
   sb.write_string(info_line)
-  let info_pad = (header_width - info_line.length() - 2).clamp(
+  let info_pad = (text_width - display_width(info_line)).clamp(
     min=0,
     max=header_width,
   )
@@ -868,7 +954,7 @@ fn render_spectrum(
   let bar_offsets = ctx.bar_offsets
 
   // --- Peak marker row with bar top connectors (MoonBit `match` dispatch) ---
-  sb.write_string("\u001b[90m     \u001b[0m")
+  sb.write_string("\u001b[90m      \u001b[0m")
   for bar in 0..<num_bars {
     if bar == dom_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
@@ -1004,7 +1090,7 @@ fn render_spectrum(
   let spectro_idx = ctx.spectrogram_idx
   let spectro_colors = ctx.spectrogram_colors
   for row in 0..<3 {
-    sb.write_string("\u001b[90m     \u001b[0m")
+    sb.write_string("\u001b[90m      \u001b[0m")
     // Get the historical frame: row 0 = most recent (current frame - 1)
     // row 1 = 2 frames ago, row 2 = 3 frames ago
     let hist_idx = (spectro_idx - 1 - row + 3) % 3
@@ -1025,19 +1111,26 @@ fn render_spectrum(
   }
 
   // --- Frequency labels (precomputed text) ---
-  sb.write_string("     ")
+  sb.write_string("      ")
   let mut label_pos = 0
   for i in 0..<num_bars {
     let label = ctx.label_strings.unsafe_get(i)
     if label.length() > 0 {
-      while label_pos < i {
+      if label_pos < i {
+        // Align the label with its bar / grid line
+        while label_pos < i {
+          sb.write_string(" ")
+          label_pos = label_pos + 1
+        }
+      } else {
+        // Previous label already covered this bar — keep a separating space
         sb.write_string(" ")
         label_pos = label_pos + 1
       }
       sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 18))
       sb.write_string(label)
       sb.write_string(ansi_reset)
-      label_pos = i + label.length()
+      label_pos = label_pos + label.length()
     }
   }
   sb.write_string("\n")
@@ -1068,6 +1161,7 @@ fn render_spectrum(
   } else {
     "\u001b[1;37m"
   }
+  sb.write_string("      ")
   sb.write_string(rms_glow)
   sb.write_string("RMS: \u001b[0m[")
   for i in 0..<meter_width {
