@@ -62,6 +62,14 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | Frequency labels | O(n²) string concatenation | StringBuilder | Linear-time label rendering |
 | Spatial smoothing | Temp array allocation per frame | In-place rolling buffer | Zero per-frame array allocs |
 | FFT buffers | Allocated per frame | Pre-allocated, reused | Zero per-frame array allocs |
+| Color table | `Array[Array[String]]` (2D, double indirection) | Flat `Array[String]` with `bar*nbl+level` index | One array access vs two per bar per row |
+| Height processing | 4 separate loops over num_bars | 2 fused loops (height+envelope, smoothing+peak) | Halves loop overhead |
+| Row invariants | `row_contrib[row]` + `beat_boost` recomputed per bar | Hoisted as `row_base` per row | Eliminates 1560 redundant additions/frame |
+| Bar offset | `bar * num_brightness_levels` per bar per row | Precomputed `bar_offsets[]` array | Eliminates 1560 multiplications/frame |
+| Color table access | Safe `ctx.color_table[bar][level]` | `color_tbl.unsafe_get(bar_off + level)` | Bypasses bounds check in hot path |
+| Bin aggregation | Safe `ctx.bin_starts[bar]` access | `unsafe_get` + local reference | Bypasses bounds check |
+| Waveform fill | Safe array access | `unsafe_set`/`unsafe_get` | Bypasses bounds check |
+| Total time string | `format_time(total, rate)` per frame | Precomputed once at startup | Eliminates string formatting per frame |
 
 ## How to Run
 

@@ -46,7 +46,7 @@ struct DisplayContext {
   is_grid : Array[Bool]
   grid_bars : Array[Int32]
   freq_labels : Array[Int32]
-  color_table : Array[Array[String]]
+  color_table : Array[String]
   row_contrib : Array[Double]
   height_factor : Double
   sample_rate : Int32
@@ -151,11 +151,11 @@ fn precompute_color_table(
   bar_g : Array[Int32],
   bar_b : Array[Int32],
   num_levels : Int32,
-) -> Array[Array[String]] {
+) -> Array[String] {
   let num_bars = bar_r.length()
-  let table : Array[Array[String]] = Array::make(num_bars, [])
+  let table = Array::make(num_bars * num_levels, "")
   for bar in 0..<num_bars {
-    let levels = Array::make(num_levels, "")
+    let bar_offset = bar * num_levels
     for level in 0..<num_levels {
       // Brightness range: 0.15 (deep dark) -> 1.0 (full bright)
       let brightness = 0.15 +
@@ -169,9 +169,8 @@ fn precompute_color_table(
       let b = (bar_b[bar].to_double() * brightness)
         .clamp(min=0.0, max=255.0)
         .to_int()
-      levels[level] = "\u001b[38;2;\{r};\{g};\{b}m"
+      table[bar_offset + level] = "\u001b[38;2;\{r};\{g};\{b}m"
     }
-    table[bar] = levels
   }
   table
 }
@@ -463,6 +462,7 @@ fn render_spectrum(
   rms_value : Double,
   beat_intensity : Double,
   waveform : Array[Double],
+  total_time_str : String,
 ) -> String {
   let sb = StringBuilder::StringBuilder()
   let num_bars = ctx.num_bars
@@ -474,7 +474,7 @@ fn render_spectrum(
 
   sb.write_string(ansi_clear)
 
-  // --- Calculate bar heights from pre-aggregated magnitudes ---
+  // --- Fused pass 1: height calc + dominant bar + attack/release envelope ---
   let mut dominant_bar = 0
   let mut max_mag = 0.0
   for bar in 0..<num_bars {
@@ -483,13 +483,10 @@ fn render_spectrum(
       max_mag = mag
       dominant_bar = bar
     }
-    heights[bar] = (scale_magnitude(mag) * max_levels.to_double()).to_int()
-  }
-
-  // --- Attack/release envelope (smoother rise, more responsive fall) ---
-  for bar in 0..<num_bars {
+    let raw_height = (scale_magnitude(mag) * max_levels.to_double()).to_int()
+    // Attack/release envelope (inline — saves one loop over num_bars)
     let prev = prev_heights[bar].to_double()
-    let curr = heights[bar].to_double()
+    let curr = raw_height.to_double()
     let smoothed = if curr >= prev {
       prev * 0.4 + curr * 0.6
     } else {
@@ -499,7 +496,7 @@ fn render_spectrum(
     prev_heights[bar] = heights[bar]
   }
 
-  // --- Spatial smoothing: in-place 3-tap blur [0.25, 0.5, 0.25] ---
+  // --- Fused pass 2: spatial smoothing + peak hold update ---
   let mut prev_val = 0.0
   for bar in 0..<num_bars {
     let left = prev_val
@@ -512,10 +509,7 @@ fn render_spectrum(
     let blurred = left * 0.25 + center * 0.5 + right * 0.25
     prev_val = center
     heights[bar] = blurred.to_int()
-  }
-
-  // --- Update peak hold ---
-  for bar in 0..<num_bars {
+    // Peak hold update (inline — saves one loop over num_bars)
     match (heights[bar] >= peak_heights[bar], peak_frames[bar] > 3) {
       (true, _) => {
         peak_heights[bar] = heights[bar]
@@ -587,13 +581,21 @@ fn render_spectrum(
   }
   sb.write_string("\u001b[0m\n")
 
+  // --- Hoist loop-invariant values for all rendering sections below ---
+  let height_factor = ctx.height_factor
+  let nbl = num_brightness_levels
+  let nbl_minus_1 = num_brightness_levels - 1
+  let color_tbl = ctx.color_table
+  // Precompute bar * nbl offsets once (avoids multiplication per bar per row)
+  let bar_offsets = Array::makei(num_bars, fn(bar) { bar * nbl })
+
   // --- Peak marker row (continuous, no bar gaps) ---
   sb.write_string("\u001b[90m     \u001b[0m")
   for bar in 0..<num_bars {
     if bar == dominant_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
     } else if ctx.is_grid[bar] {
-      sb.write_string(ctx.color_table[bar][3])
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + 3))
       sb.write_string("╎\u001b[0m")
     } else {
       sb.write_string(" ")
@@ -607,53 +609,48 @@ fn render_spectrum(
     let level_top = (max_height - row) * sub_res
     let level_bottom = (max_height - row - 1) * sub_res
     let ref_line = is_ref_line(row, max_height)
+    // Row-invariant base: row_contrib[row] + beat_boost (computed once per row)
+    let row_base = ctx.row_contrib[row] + beat_boost.to_double()
     for bar in 0..<num_bars {
+      let bar_off = bar_offsets.unsafe_get(bar)
       match
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
-          let level = (ctx.row_contrib[row] +
-            heights[bar].to_double() * ctx.height_factor +
-            beat_boost.to_double())
+          let level = (row_base + heights[bar].to_double() * height_factor)
             .to_int()
-            .clamp(min=0, max=num_brightness_levels - 1)
-          sb.write_string(ctx.color_table[bar][level])
+            .clamp(min=0, max=nbl_minus_1)
+          sb.write_string(color_tbl.unsafe_get(bar_off + level))
           sb.write_string("█")
         }
         BarCap => {
-          let level = (ctx.row_contrib[row] +
-            heights[bar].to_double() * ctx.height_factor +
-            beat_boost.to_double() +
-            4.0)
+          let level = (row_base + heights[bar].to_double() * height_factor + 4.0)
             .to_int()
-            .clamp(min=0, max=num_brightness_levels - 1)
-          sb.write_string(ctx.color_table[bar][level])
+            .clamp(min=0, max=nbl_minus_1)
+          sb.write_string(color_tbl.unsafe_get(bar_off + level))
           sb.write_string("▀")
         }
         PartialBlock(frac) => {
-          let level = (ctx.row_contrib[row] +
-            heights[bar].to_double() * ctx.height_factor +
-            beat_boost.to_double())
+          let level = (row_base + heights[bar].to_double() * height_factor)
             .to_int()
-            .clamp(min=0, max=num_brightness_levels - 1)
-          sb.write_string(ctx.color_table[bar][level])
+            .clamp(min=0, max=nbl_minus_1)
+          sb.write_string(color_tbl.unsafe_get(bar_off + level))
           sb.write_string(partial_blocks[frac])
         }
         PeakMarker => {
           sb.write_string("\u001b[1m")
-          let peak_level = (peak_heights[bar].to_double() * ctx.height_factor +
-            20.0)
+          let peak_level = (peak_heights[bar].to_double() * height_factor + 20.0)
             .to_int()
-            .clamp(min=10, max=num_brightness_levels - 1)
-          sb.write_string(ctx.color_table[bar][peak_level])
+            .clamp(min=10, max=nbl_minus_1)
+          sb.write_string(color_tbl.unsafe_get(bar_off + peak_level))
           sb.write_string("━")
           sb.write_string("\u001b[22m")
         }
         Empty =>
           if ctx.is_grid[bar] {
-            sb.write_string(ctx.color_table[bar][3])
+            sb.write_string(color_tbl.unsafe_get(bar_off + 3))
             sb.write_string("╎\u001b[0m")
           } else if ref_line {
-            sb.write_string(ctx.color_table[bar][2])
+            sb.write_string(color_tbl.unsafe_get(bar_off + 2))
             sb.write_string("┄\u001b[0m")
           } else {
             sb.write_string(" ")
@@ -685,7 +682,9 @@ fn render_spectrum(
           3 => 4
           _ => 2
         }
-        sb.write_string(ctx.color_table[bar][color_level])
+        sb.write_string(
+          color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + color_level),
+        )
         sb.write_string("▀")
       } else {
         sb.write_string(" ")
@@ -711,7 +710,7 @@ fn render_spectrum(
         sb.write_string(" ")
         label_pos = label_pos + 1
       }
-      sb.write_string(ctx.color_table[i][18])
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 18))
       sb.write_string(found_label)
       sb.write_string("\u001b[0m")
       label_pos = i + found_label.length()
@@ -760,10 +759,10 @@ fn render_spectrum(
 
   for i in 0..<num_bars {
     if i < progress_filled {
-      sb.write_string(ctx.color_table[i][28])
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 28))
       sb.write_string("║")
     } else if i == progress_filled {
-      sb.write_string(ctx.color_table[i][28])
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 28))
       sb.write_string("▓")
     } else {
       sb.write_string("\u001b[90m░")
@@ -772,7 +771,7 @@ fn render_spectrum(
   sb.write_string("\u001b[0m ")
   let pct_int = (progress_pct * 100.0).to_int()
   sb.write_string(
-    "\{pct_int}%  \{format_time(current_pos, sample_rate)} / \{format_time(total_samples, sample_rate)}\n",
+    "\{pct_int}%  \{format_time(current_pos, sample_rate)} / \{total_time_str}\n",
   )
 
   sb.to_string()

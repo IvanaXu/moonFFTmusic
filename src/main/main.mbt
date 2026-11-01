@@ -128,6 +128,8 @@ async fn main {
 
   // --- Main visualization loop ---
   let total = wav.samples.length()
+  // Precompute total time string (invariant across frames)
+  let total_time_str = format_time(total, wav.sample_rate)
   let mut pos = 0
   while pos + fft_size <= total {
     // Step 1-3 FUSED: Load samples + compute RMS + apply Hann window in one pass
@@ -153,9 +155,11 @@ async fn main {
 
     // Step 6: Bin aggregation — for each bar, find max mag² in bin range,
     // then sqrt only once per bar (60 sqrts vs 512)
+    let bin_starts = ctx.bin_starts
+    let bin_ends = ctx.bin_ends
     for bar in 0..<num_bars {
-      let start = ctx.bin_starts[bar]
-      let end = ctx.bin_ends[bar]
+      let start = bin_starts.unsafe_get(bar)
+      let end = bin_ends.unsafe_get(bar)
       let mut max_sq = 0.0
       for bin_idx in start..<end {
         let sq = mag_sq.unsafe_get(bin_idx)
@@ -170,15 +174,23 @@ async fn main {
     let beat_intensity = beat_detector.update(rms)
 
     // Step 8: Fill waveform array in-place (no allocation)
+    let wav_samples = wav.samples
     for i in 0..<num_bars {
       let idx = pos + i * fft_size / num_bars
-      waveform[i] = if idx < total { wav.samples[idx] } else { 0.0 }
+      waveform.unsafe_set(
+        i,
+        if idx < total {
+          wav_samples.unsafe_get(idx)
+        } else {
+          0.0
+        },
+      )
     }
 
     // Step 9: Render and display (all arrays reused, zero alloc)
     let display = render_spectrum(
       magnitudes, ctx, peak_heights, peak_frames, prev_heights, heights, pos, total,
-      rms, beat_intensity, waveform,
+      rms, beat_intensity, waveform, total_time_str,
     )
     println(display)
 
