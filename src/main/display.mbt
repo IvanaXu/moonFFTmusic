@@ -641,6 +641,7 @@ fn render_spectrum(
   peak_heights : Array[Int32],
   peak_frames : Array[Int32],
   prev_heights : Array[Int32],
+  render_prev : Array[Int32],
   heights : Array[Int32],
   current_pos : Int32,
   total_samples : Int32,
@@ -672,14 +673,16 @@ fn render_spectrum(
     }
     let raw_height = (scale_magnitude(mag) * max_levels.to_double()).to_int()
     // Attack/release envelope (inline — saves one loop over num_bars)
+    // Less aggressive attack (0.5/0.5) reduces rise-time flicker
     let prev = prev_heights[bar].to_double()
     let curr = raw_height.to_double()
     let smoothed = if curr >= prev {
-      prev * 0.4 + curr * 0.6
+      prev * 0.5 + curr * 0.5
     } else {
-      prev * 0.8 + curr * 0.2
+      prev * 0.82 + curr * 0.18
     }
-    heights[bar] = smoothed.to_int()
+    // Round instead of truncate — eliminates integer-boundary oscillation
+    heights[bar] = (smoothed + 0.5).to_int()
     prev_heights[bar] = heights[bar]
   }
 
@@ -693,9 +696,17 @@ fn render_spectrum(
     } else {
       0.0
     }
-    let blurred = left * 0.25 + center * 0.5 + right * 0.25
+    // Stronger spatial smoothing (0.3/0.4/0.3) suppresses inter-bar flicker
+    let blurred = left * 0.3 + center * 0.4 + right * 0.3
     prev_val = center
-    heights[bar] = blurred.to_int()
+    // Temporal IIR: blend with previous frame's final height
+    // This is the key anti-flicker measure — eliminates single-step
+    // oscillation (e.g. 15↔16) by low-pass filtering the final output.
+    let new_h = (blurred + 0.5).to_int()
+    let old_h = render_prev.unsafe_get(bar)
+    let temporal = (old_h.to_double() * 0.35 + new_h.to_double() * 0.65 + 0.5).to_int()
+    heights[bar] = temporal
+    render_prev.unsafe_set(bar, temporal)
     // Peak hold update (inline — saves one loop over num_bars)
     match (heights[bar] >= peak_heights[bar], peak_frames[bar] > 3) {
       (true, _) => {
@@ -782,14 +793,25 @@ fn render_spectrum(
     if bar == dominant_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
     } else if heights[bar] > 0 {
-      // Bar top connector — shows shape of spectrum envelope
-      let left_h = if bar > 0 { heights[bar - 1] } else { 0 }
-      let right_h = if bar < num_bars - 1 { heights[bar + 1] } else { 0 }
+      // Bar top connector — use blended height for temporal stability
+      // Blending pass-1 (prev_heights) and pass-2 (heights) smooths
+      // the connector input, reducing ╱↔─↔╲ oscillation.
+      let blend_h = (heights[bar] + prev_heights[bar]) / 2
+      let left_h = if bar > 0 {
+        (heights[bar - 1] + prev_heights[bar - 1]) / 2
+      } else {
+        0
+      }
+      let right_h = if bar < num_bars - 1 {
+        (heights[bar + 1] + prev_heights[bar + 1]) / 2
+      } else {
+        0
+      }
       let level = (heights[bar].to_double() * height_factor + 12.0)
         .to_int()
         .clamp(min=4, max=nbl_minus_1)
       sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level))
-      sb.write_string(connector_char(left_h, heights[bar], right_h))
+      sb.write_string(connector_char(left_h, blend_h, right_h))
     } else if ctx.is_grid[bar] {
       sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + 3))
       sb.write_string("╎\u001b[0m")
