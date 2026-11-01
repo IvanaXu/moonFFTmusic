@@ -824,7 +824,17 @@ fn render_spectrum(
   let border_char = if beat_intensity > 0.5 { "━" } else { "═" }
 
   // --- Beat-reactive brightness boost (shift color level up to 4) ---
-  let beat_boost = (beat_intensity * 6.0).to_int()
+  // Beat bloom: brightness boost on all bars, more dramatic on strong beats
+  let beat_boost = (beat_intensity * 10.0).to_int()
+  // Scanline: a gentle highlight row that sweeps up and down
+  // Uses current_pos as time source — no extra parameter needed
+  let scan_cycle = max_height * 2
+  let scan_raw = current_pos / sub_res % scan_cycle
+  let scan_row = if scan_raw < max_height {
+    scan_raw
+  } else {
+    scan_cycle - scan_raw - 1
+  }
 
   // --- Header ---
   let header_width = num_bars + 6
@@ -922,8 +932,10 @@ fn render_spectrum(
     let level_top = (max_height - row) * sub_res
     let level_bottom = (max_height - row - 1) * sub_res
     let ref_line = is_ref_line(row, max_height)
-    // Row-invariant base: row_contrib[row] + beat_boost (computed once per row)
-    let row_base = ctx.row_contrib[row] + beat_boost.to_double()
+    // Row-invariant base: row_contrib[row] + beat_boost + scanline
+    // Scanline adds a subtle +2 brightness to one sweeping row
+    let scan_boost = if row == scan_row { 2.0 } else { 0.0 }
+    let row_base = ctx.row_contrib[row] + beat_boost.to_double() + scan_boost
     for bar in 0..<num_bars {
       let bar_off = bar_offsets.unsafe_get(bar)
       match
@@ -936,7 +948,8 @@ fn render_spectrum(
           sb.write_string("█")
         }
         BarCap => {
-          let level = (row_base + heights_d.unsafe_get(bar) + 4.0)
+          // Crown: extra brightness on bar top — glowing cap effect
+          let level = (row_base + heights_d.unsafe_get(bar) + 8.0)
             .to_int()
             .clamp(min=0, max=nbl_minus_1)
           sb.write_string(color_tbl.unsafe_get(bar_off + level))
