@@ -20,6 +20,12 @@ type Complex derive(@debug.Debug)
 
 type DisplayContext
 
+type EnergySparkline derive(@debug.Debug)
+
+type PeakTrail
+
+type TrailFade
+
 type WavData derive(@debug.Debug)
 
 // Type aliases

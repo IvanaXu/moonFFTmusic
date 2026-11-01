@@ -27,7 +27,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 - **Pre-allocated FFT Buffers**: `re[]` and `im[]` arrays are allocated once and
   reused across all frames — zero per-frame array allocations.
 
-### Visual Display (18 enhancements)
+### Visual Display (21 enhancements)
 
 | # | Feature | Description |
 |---|---------|-------------|

@@ -93,6 +93,191 @@ fn BeatDetector::update(self : BeatDetector, rms : Double) -> Double {
 }
 
 ///|
+/// Energy history sparkline — compact one-line RMS energy trend graph.
+/// Uses MoonBit `mut` struct fields for circular buffer state.
+struct EnergySparkline {
+  history : Array[Double]
+  mut idx : Int32
+  size : Int32
+  mut max_energy : Double
+} derive(Debug)
+
+///|
+fn EnergySparkline::new(size : Int32) -> EnergySparkline {
+  EnergySparkline::{
+    history: Array::make(size, 0.0),
+    idx: 0,
+    size,
+    max_energy: 0.001,
+  }
+}
+
+///|
+/// Push new RMS value into circular buffer; track running max with decay.
+fn EnergySparkline::push(self : EnergySparkline, rms : Double) -> Unit {
+  let energy = rms * rms
+  self.history.unsafe_set(self.idx, energy)
+  self.idx = (self.idx + 1) % self.size
+  // Adaptive max with slow decay — auto-adjusts to dynamic range
+  self.max_energy = (self.max_energy * 0.995).clamp(min=0.001, max=1.0)
+  if energy > self.max_energy {
+    self.max_energy = energy
+  }
+}
+
+///|
+/// Sparkline character set — MoonBit `Array` literal with Unicode partial blocks
+let sparkline_chars : Array[String] = [
+  "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█",
+]
+
+///|
+/// Render energy sparkline as a compact one-line graph.
+/// Uses MoonBit `match` for color zone selection and `Array::unsafe_get` for hot path.
+fn render_energy_sparkline(
+  sb : StringBuilder,
+  sparkline : EnergySparkline,
+  width : Int32,
+) -> Unit {
+  let n = sparkline.size
+  let hist = sparkline.history
+  let max_e = sparkline.max_energy
+  let step = n.to_double() / width.to_double()
+  sb.write_string("\u001b[90m  EN \u001b[0m")
+  for i in 0..<width {
+    // Map display position to circular buffer index (oldest → newest)
+    let buf_idx = ((sparkline.idx.to_double() + i.to_double() * step).to_int() %
+    n).clamp(min=0, max=n - 1)
+    let energy = hist.unsafe_get(buf_idx)
+    let ratio = (energy / max_e).clamp(min=0.0, max=1.0)
+    // MoonBit `match` with guard patterns for color zone selection
+    let char_idx = (ratio * 7.0).to_int().clamp(min=0, max=7)
+    let (r, g, b) = match ratio {
+      rr if rr > 0.75 => (255, 80 + char_idx * 10, 40) // hot zone — red/orange
+      rr if rr > 0.5 => (255, 180, 40 + char_idx * 10) // warm zone — yellow
+      rr if rr > 0.25 => (80 + char_idx * 20, 220, 80) // mid zone — green
+      _ => (40, 100 + char_idx * 15, 200) // cool zone — blue
+    }
+    sb.write_string("\u001b[38;2;\{r};\{g};\{b}m")
+    sb.write_string(sparkline_chars.unsafe_get(char_idx))
+  }
+  sb.write_string("\u001b[0m\n")
+}
+
+///|
+/// Peak frequency trail — tracks dominant frequency bar position over time.
+/// Uses MoonBit `mut` struct fields for circular buffer; `enum` for fade levels.
+struct PeakTrail {
+  history : Array[Int32] // bar positions (-1 = no peak)
+  mut idx : Int32
+  size : Int32
+}
+
+///|
+/// Trail fade level — MoonBit `enum` for rendering dispatch
+enum TrailFade {
+  Fresh // most recent — bright dot
+  Recent // medium fade
+  Old // dim fade
+  Gone // too old — don't render
+}
+
+///|
+fn PeakTrail::new(size : Int32) -> PeakTrail {
+  PeakTrail::{ history: Array::make(size, -1), idx: 0, size, }
+}
+
+///|
+fn PeakTrail::push(self : PeakTrail, bar : Int32) -> Unit {
+  self.history.unsafe_set(self.idx, bar)
+  self.idx = (self.idx + 1) % self.size
+}
+
+///|
+/// Classify trail age into fade level — MoonBit `match` with guard patterns
+fn trail_fade(age : Int32, size : Int32) -> TrailFade {
+  let ratio = age.to_double() / size.to_double()
+  match ratio {
+    r if r < 0.15 => Fresh
+    r if r < 0.4 => Recent
+    r if r < 0.7 => Old
+    _ => Gone
+  }
+}
+
+///|
+/// Render peak frequency trail as a row above the spectrum bars.
+/// Shows where the dominant frequency has been over recent frames with fading dots.
+/// Uses MoonBit `match` on `TrailFade` enum for rendering dispatch.
+fn render_peak_trail(
+  sb : StringBuilder,
+  trail : PeakTrail,
+  num_bars : Int32,
+  color_tbl : Array[String],
+  bar_offsets : Array[Int32],
+) -> Unit {
+  sb.write_string("\u001b[90m     \u001b[0m")
+  // Build a per-bar fade level array (most recent wins on collision)
+  let bar_fade = Array::make(num_bars, 4) // 4 = Gone
+  let n = trail.size
+  let hist = trail.history
+  for age in 0..<n {
+    // age=0 is most recent, age=n-1 is oldest
+    let buf_idx = (trail.idx - 1 - age + n) % n
+    let bar = hist.unsafe_get(buf_idx)
+    if bar >= 0 && bar < num_bars {
+      let fade = match trail_fade(age, n) {
+        Fresh => 0
+        Recent => 1
+        Old => 2
+        Gone => 3
+      }
+      // Only update if this bar hasn't been set by a more recent entry
+      if bar_fade.unsafe_get(bar) > fade {
+        bar_fade.unsafe_set(bar, fade)
+      }
+    }
+  }
+  // Render the trail row
+  for bar in 0..<num_bars {
+    let bar_off = bar_offsets.unsafe_get(bar)
+    match bar_fade.unsafe_get(bar) {
+      0 => { // Fresh — bright pulsing dot
+        sb.write_string(color_tbl.unsafe_get(bar_off + 28))
+        sb.write_string("●")
+      }
+      1 => { // Recent — medium dot
+        sb.write_string(color_tbl.unsafe_get(bar_off + 20))
+        sb.write_string("•")
+      }
+      2 => { // Old — dim dot
+        sb.write_string(color_tbl.unsafe_get(bar_off + 10))
+        sb.write_string("·")
+      }
+      _ => sb.write_string(" ")
+    }
+  }
+  sb.write_string("\u001b[0m\n")
+}
+
+///|
+/// Bar top connector character — based on height difference with neighbors.
+/// Uses MoonBit `match` for character selection: ─ ╱ ╲ ╳
+fn connector_char(left_h : Int32, curr_h : Int32, right_h : Int32) -> String {
+  let diff_r = right_h - curr_h
+  let diff_l = curr_h - left_h
+  // Threshold=6 creates a wider dead zone, preventing ╱↔─↔╲ flicker
+  // when neighboring bar heights oscillate within a small range.
+  match (diff_l, diff_r) {
+    (dl, dr) if dl > 6 && dr > 6 => "╱" // rising →
+    (dl, dr) if dl < -6 && dr < -6 => "╲" // falling →
+    (dl, dr) if dl > 6 && dr < -6 => "╳" // peak
+    (dl, dr) if dl < -6 && dr > 6 => "╳" // valley
+    _ => "─" // similar height — flat connector
+  }
+}
+
+///|
 enum BarState {
   FullBlock
   BarCap
@@ -463,6 +648,8 @@ fn render_spectrum(
   beat_intensity : Double,
   waveform : Array[Double],
   total_time_str : String,
+  sparkline : EnergySparkline,
+  peak_trail : PeakTrail,
 ) -> String {
   let sb = StringBuilder::StringBuilder()
   let num_bars = ctx.num_bars
@@ -589,11 +776,20 @@ fn render_spectrum(
   // Precompute bar * nbl offsets once (avoids multiplication per bar per row)
   let bar_offsets = Array::makei(num_bars, fn(bar) { bar * nbl })
 
-  // --- Peak marker row (continuous, no bar gaps) ---
+  // --- Peak marker row with bar top connectors (MoonBit `match` dispatch) ---
   sb.write_string("\u001b[90m     \u001b[0m")
   for bar in 0..<num_bars {
     if bar == dominant_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
+    } else if heights[bar] > 0 {
+      // Bar top connector — shows shape of spectrum envelope
+      let left_h = if bar > 0 { heights[bar - 1] } else { 0 }
+      let right_h = if bar < num_bars - 1 { heights[bar + 1] } else { 0 }
+      let level = (heights[bar].to_double() * height_factor + 12.0)
+        .to_int()
+        .clamp(min=4, max=nbl_minus_1)
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level))
+      sb.write_string(connector_char(left_h, heights[bar], right_h))
     } else if ctx.is_grid[bar] {
       sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + 3))
       sb.write_string("╎\u001b[0m")
@@ -602,6 +798,9 @@ fn render_spectrum(
     }
   }
   sb.write_string("\n")
+
+  // --- Peak frequency trail row (MoonBit `enum` + `match` fade dispatch) ---
+  render_peak_trail(sb, peak_trail, num_bars, color_tbl, bar_offsets)
 
   // --- Render bars with precomputed color table (continuous, no gaps) ---
   for row in 0..<max_height {
@@ -720,6 +919,9 @@ fn render_spectrum(
 
   // --- Waveform strip ---
   render_waveform(sb, waveform, num_bars, beat_intensity)
+
+  // --- Energy history sparkline (MoonBit `mut` circular buffer) ---
+  render_energy_sparkline(sb, sparkline, num_bars)
 
   // --- RMS meter ---
   let rms_db = if rms_value > 0.0 {

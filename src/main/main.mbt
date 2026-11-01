@@ -102,6 +102,12 @@ async fn main {
   // --- Initialize beat detector ---
   let beat_detector = BeatDetector::new(43)
 
+  // --- Initialize energy sparkline (MoonBit `mut` circular buffer) ---
+  let sparkline = EnergySparkline::new(num_bars * 2)
+
+  // --- Initialize peak frequency trail (MoonBit `enum` fade dispatch) ---
+  let peak_trail = PeakTrail::new(num_bars)
+
   // --- Initialize peak hold arrays ---
   let peak_heights = Array::make(num_bars, 0)
   let peak_frames = Array::make(num_bars, 0)
@@ -131,6 +137,9 @@ async fn main {
   // Precompute total time string (invariant across frames)
   let total_time_str = format_time(total, wav.sample_rate)
   let mut pos = 0
+  // Sticky dominant bar — resists jitter when multiple bars have similar magnitude.
+  // Only switch when the new bar is >20% stronger or >3 positions away.
+  let mut last_dom_bar = 0
   while pos + fft_size <= total {
     // Step 1-3 FUSED: Load samples + compute RMS + apply Hann window in one pass
     // (eliminates 2 separate loops over fft_size = 2048 iterations saved per frame)
@@ -170,8 +179,9 @@ async fn main {
       magnitudes.unsafe_set(bar, max_sq.sqrt())
     }
 
-    // Step 7: Update beat detector
+    // Step 7: Update beat detector + energy sparkline + peak trail
     let beat_intensity = beat_detector.update(rms)
+    sparkline.push(rms)
 
     // Step 8: Fill waveform array in-place (no allocation)
     let wav_samples = wav.samples
@@ -188,9 +198,31 @@ async fn main {
     }
 
     // Step 9: Render and display (all arrays reused, zero alloc)
+    // Find dominant bar with sticky logic to prevent trail flicker.
+    // The dominant bar only switches if the new peak is >20% stronger
+    // or >3 positions away from the last — this prevents the ● dot
+    // from jumping between adjacent bars with similar magnitudes.
+    let mut raw_dom_bar = 0
+    let mut dom_max = 0.0
+    for bar in 0..<num_bars {
+      let m = magnitudes.unsafe_get(bar)
+      if m > dom_max {
+        dom_max = m
+        raw_dom_bar = bar
+      }
+    }
+    let dom_bar = if (raw_dom_bar - last_dom_bar).abs() > 3 ||
+      dom_max > magnitudes.unsafe_get(last_dom_bar) * 1.2 {
+      last_dom_bar = raw_dom_bar
+      raw_dom_bar
+    } else {
+      last_dom_bar
+    }
+    peak_trail.push(dom_bar)
+
     let display = render_spectrum(
       magnitudes, ctx, peak_heights, peak_frames, prev_heights, heights, pos, total,
-      rms, beat_intensity, waveform, total_time_str,
+      rms, beat_intensity, waveform, total_time_str, sparkline, peak_trail,
     )
     println(display)
 
