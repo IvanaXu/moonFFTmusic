@@ -49,7 +49,6 @@ struct DisplayContext {
   height_factor : Double
   sample_rate : Int32
   fft_size : Int32
-  separator_colors : Array[String]
   meter_colors : Array[String]
   label_strings : Array[String]
   db_scale_labels : Array[String]
@@ -469,15 +468,6 @@ fn create_display_context(
   })
   let max_levels = max_height * sub_res
   let height_factor = 14.0 / max_levels.to_double()
-  // Precompute separator colors (gradient at base lightness 0.3)
-  let sep_count = num_bars + 6
-  let separator_colors = Array::make(sep_count, "")
-  for i in 0..<sep_count {
-    let ratio = i.to_double() / (sep_count - 1).to_double()
-    let hue = 260.0 * (1.0 - ratio)
-    let (r, g, b) = hsl_to_rgb(hue, 0.6, 0.3)
-    separator_colors[i] = "\u001b[38;2;\{r};\{g};\{b}m"
-  }
   // Precompute RMS meter colors (green→yellow→red gradient, 20 levels)
   let meter_width = 20
   let meter_colors = Array::make(meter_width, "")
@@ -562,7 +552,6 @@ fn create_display_context(
     height_factor,
     sample_rate,
     fft_size,
-    separator_colors,
     meter_colors,
     label_strings,
     db_scale_labels,
@@ -819,13 +808,6 @@ fn render_spectrum(
   }
   sb.write_string("╝\n\u001b[0m")
 
-  // --- Separator with precomputed gradient colors ---
-  for i in 0..<(num_bars + 6) {
-    sb.write_string(ctx.separator_colors.unsafe_get(i))
-    sb.write_string("─")
-  }
-  sb.write_string("\u001b[0m\n")
-
   // --- Hoist loop-invariant values for all rendering sections below ---
   let height_factor = ctx.height_factor
   let nbl_minus_1 = num_brightness_levels - 1
@@ -939,8 +921,8 @@ fn render_spectrum(
     sb.write_string("\n")
   }
 
-  // --- Bottom glow reflection with proper bar colors (5 rows) ---
-  for glow_row in 0..<5 {
+  // --- Bottom glow reflection with proper bar colors (3 rows) ---
+  for glow_row in 0..<3 {
     sb.write_string("\u001b[90m     \u001b[0m")
     let glow_factor = match glow_row {
       0 => 0.4
@@ -1010,7 +992,7 @@ fn render_spectrum(
   let meter_filled = (rms_pct * 20.0).to_int()
 
   let meter_width = 20
-  sb.write_string("\n\u001b[1;37mRMS: \u001b[0m[")
+  sb.write_string("\u001b[1;37mRMS: \u001b[0m[")
   for i in 0..<meter_width {
     if i < meter_filled {
       sb.write_string(ctx.meter_colors.unsafe_get(i))
@@ -1046,7 +1028,7 @@ fn render_spectrum(
   sb.write_string("\u001b[0m ")
   let pct_int = (progress_pct * 100.0).to_int()
   sb.write_string(
-    "\{pct_int}%  \{format_time(current_pos, sample_rate)} / \{total_time_str}\n",
+    "\{pct_int}%  \{format_time(current_pos, sample_rate)} / \{total_time_str}",
   )
 
   sb.to_string()

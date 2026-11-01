@@ -78,7 +78,7 @@ async fn main {
 
   // --- Display configuration ---
   let num_bars = 60
-  let max_height = 26
+  let max_height = 16
   let sub_res = 8
   let sleep_ms : Int32 = 50
   let hop_size = fft_size / 2
