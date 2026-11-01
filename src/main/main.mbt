@@ -78,7 +78,29 @@ async fn main {
 
   // --- Display configuration ---
   let num_bars = 60
-  let max_height = 16
+  // Auto-detect terminal height to prevent scroll flicker.
+  // Fixed overhead per frame: 4(header) + 1(peak) + 1(trail) + 3(glow)
+  //   + 1(labels) + 1(waveform) + 1(sparkline) + 1(RMS) + 1(progress) = 14
+  // max_height = terminal_lines - 14, clamped to [8, 40]
+  let max_height = match @env.get_env_var("LINES") {
+    Some(s) => {
+      // Parse LINES env var to int
+      let mut lines = 0
+      let mut valid = false
+      for c in s {
+        if c >= '0' && c <= '9' {
+          lines = lines * 10 + (c.to_int() - '0'.to_int())
+          valid = true
+        }
+      }
+      if valid {
+        (lines - 14).clamp(min=8, max=40)
+      } else {
+        12
+      }
+    }
+    None => 12 // default: fits 26-line terminal
+  }
   let sub_res = 8
   let sleep_ms : Int32 = 50
   let hop_size = fft_size / 2
