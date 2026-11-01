@@ -353,7 +353,7 @@ fn precompute_color_tables(
       let sat = bar_sats[bar]
       let light = bar_lights[bar]
       // Vertical hue gradient: a deeper hue at the base, a brighter hue at the
-      // top (±14°), so each column reads as a glowing neon tube instead of a
+      // top (±18°), so each column reads as a glowing neon tube instead of a
       // flat fill. Colour still means frequency — the pair is anchored to the bar.
       let (br0, bg0, bb0) = hsl_to_rgb(hue - 18.0, sat, light)
       let (br1, bg1, bb1) = hsl_to_rgb(hue + 18.0, sat, light)
@@ -361,15 +361,15 @@ fn precompute_color_tables(
       for level in 0..<nbl {
         let lr = level.to_double() / (nbl - 1).to_double()
         let brightness = 0.22 + lr * 0.78
-        let r = ((br0.to_double() + (br1 - br0).to_double() * lr) * brightness)
-          .clamp(min=0.0, max=255.0)
-          .to_int()
-        let g = ((bg0.to_double() + (bg1 - bg0).to_double() * lr) * brightness)
-          .clamp(min=0.0, max=255.0)
-          .to_int()
-        let b = ((bb0.to_double() + (bb1 - bb0).to_double() * lr) * brightness)
-          .clamp(min=0.0, max=255.0)
-          .to_int()
+        // Neon glow: the hottest cells blend slightly toward white, giving each
+        // bar a bright glowing core instead of flat saturated color.
+        let glow = lr * lr * 0.18
+        let rr = (br0.to_double() + (br1 - br0).to_double() * lr) * brightness
+        let gg = (bg0.to_double() + (bg1 - bg0).to_double() * lr) * brightness
+        let bb = (bb0.to_double() + (bb1 - bb0).to_double() * lr) * brightness
+        let r = (rr + (255.0 - rr) * glow).clamp(min=0.0, max=255.0).to_int()
+        let g = (gg + (255.0 - gg) * glow).clamp(min=0.0, max=255.0).to_int()
+        let b = (bb + (255.0 - bb) * glow).clamp(min=0.0, max=255.0).to_int()
         table.unsafe_set(bar_off + level, "\u001b[38;2;\{r};\{g};\{b}m")
       }
     }

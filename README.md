@@ -48,7 +48,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | 13 | Peak frequency marker | Yellow `▼` arrow above dominant frequency bar |
 | 14 | Vertical frequency grid | Faint `╎` at label positions (50Hz – 10kHz) |
 | 15 | Magnitude-based color | Brightness = 50% row position + 50% magnitude ratio |
-| 16 | **True-color 24-bit RGB gradient** | Smooth HSL-based rainbow (blue→cyan→green→yellow→red) using `\u001b[38;2;R;G;Bm`, precomputed per-bar |
+| 16 | **True-color 24-bit RGB gradient** | Smooth HSL-based rainbow (blue→cyan→green→yellow→red) with a white-glow core, using `\u001b[38;2;R;G;Bm`, precomputed per-bar |
 | 17 | **Beat detection with pulse glow** | RMS energy history tracking; border flashes warm orange on detected beats, ♫ indicator in header |
 | 18 | **Waveform strip** | Time-domain signal display at bottom showing the actual audio waveform shape |
 
