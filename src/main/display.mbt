@@ -871,6 +871,17 @@ fn render_spectrum(
   render_peak_trail(sb, peak_trail, num_bars, color_tbl, bar_offsets)
 
   // --- Render bars with precomputed color table (continuous, no gaps) ---
+  // Precompute heights[bar] * height_factor once — avoids to_double + multiply
+  // per bar per row (saves 2 ops × 60 bars × 20 rows = 2400 ops/frame)
+  let heights_d = Array::make(num_bars, 0.0)
+  let peak_heights_d = Array::make(num_bars, 0.0)
+  for bar in 0..<num_bars {
+    heights_d.unsafe_set(bar, heights[bar].to_double() * height_factor)
+    peak_heights_d.unsafe_set(
+      bar,
+      peak_heights[bar].to_double() * height_factor,
+    )
+  }
   for row in 0..<max_height {
     sb.write_string(ctx.db_scale_labels.unsafe_get(row))
     let level_top = (max_height - row) * sub_res
@@ -883,21 +894,21 @@ fn render_spectrum(
       match
         bar_state(heights[bar], peak_heights[bar], level_top, level_bottom) {
         FullBlock => {
-          let level = (row_base + heights[bar].to_double() * height_factor)
+          let level = (row_base + heights_d.unsafe_get(bar))
             .to_int()
             .clamp(min=0, max=nbl_minus_1)
           sb.write_string(color_tbl.unsafe_get(bar_off + level))
           sb.write_string("█")
         }
         BarCap => {
-          let level = (row_base + heights[bar].to_double() * height_factor + 4.0)
+          let level = (row_base + heights_d.unsafe_get(bar) + 4.0)
             .to_int()
             .clamp(min=0, max=nbl_minus_1)
           sb.write_string(color_tbl.unsafe_get(bar_off + level))
           sb.write_string("▀")
         }
         PartialBlock(frac) => {
-          let level = (row_base + heights[bar].to_double() * height_factor)
+          let level = (row_base + heights_d.unsafe_get(bar))
             .to_int()
             .clamp(min=0, max=nbl_minus_1)
           sb.write_string(color_tbl.unsafe_get(bar_off + level))
@@ -905,7 +916,7 @@ fn render_spectrum(
         }
         PeakMarker => {
           sb.write_string("\u001b[1m")
-          let peak_level = (peak_heights[bar].to_double() * height_factor + 20.0)
+          let peak_level = (peak_heights_d.unsafe_get(bar) + 20.0)
             .to_int()
             .clamp(min=10, max=nbl_minus_1)
           sb.write_string(color_tbl.unsafe_get(bar_off + peak_level))
