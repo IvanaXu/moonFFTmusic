@@ -70,6 +70,15 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | Bin aggregation | Safe `ctx.bin_starts[bar]` access | `unsafe_get` + local reference | Bypasses bounds check |
 | Waveform fill | Safe array access | `unsafe_set`/`unsafe_get` | Bypasses bounds check |
 | Total time string | `format_time(total, rate)` per frame | Precomputed once at startup | Eliminates string formatting per frame |
+| Frequency label text | O(60×8) nested loop + `format_freq` per frame | Precomputed `label_strings[]` array | Eliminates 480 iterations + string formatting/frame |
+| dB scale labels | `hsl_to_rgb` per row per frame | Precomputed `db_scale_labels[]` array | Eliminates 20 `hsl_to_rgb` calls/frame |
+| Waveform colors | String interpolation per bar per frame | Precomputed 9×256=2304 color table | Eliminates 60 string interpolations/frame |
+| Sparkline colors | String interpolation per bar per frame | Precomputed 4×8=32 color table | Eliminates 60 string interpolations/frame |
+| `bar_offsets` array | `Array::makei` per frame | Precomputed in `DisplayContext` | Eliminates 1 array allocation/frame |
+| `bar_fade` array | `Array::make` per frame | Reusable field in `PeakTrail` | Eliminates 1 array allocation/frame |
+| Height double conversion | `to_double()` × `height_factor` per bar per row | Precomputed `heights_d[]` before row loop | Eliminates 2400 `to_double`+multiply/frame |
+| IIR anti-flicker state | `Array[Int32]` (integer IIR can't eliminate ±1 oscillation) | `Array[Double]` (float IIR before quantization) | Eliminates residual ±1 flicker |
+| Dominant bar marker | Raw `dominant_bar` recomputed per frame | Sticky `dom_bar` passed from `main.mbt` | Eliminates ▼ marker jumping |
 
 ## How to Run
 
