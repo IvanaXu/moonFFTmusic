@@ -44,8 +44,11 @@ struct DisplayContext {
   bin_starts : Array[Int32]
   bin_ends : Array[Int32]
   is_grid : Array[Bool]
-  color_table : Array[String]
+  color_tables : Array[Array[String]]
+  mut color_table_idx : Int32
   row_contrib : Array[Double]
+  heights_d : Array[Double]
+  peak_heights_d : Array[Double]
   height_factor : Double
   sample_rate : Int32
   fft_size : Int32
@@ -54,9 +57,6 @@ struct DisplayContext {
   db_scale_labels : Array[String]
   waveform_colors : Array[String]
   bar_offsets : Array[Int32]
-  bar_hues : Array[Double]
-  bar_sats : Array[Double]
-  bar_lights : Array[Double]
 }
 
 ///|
@@ -377,59 +377,41 @@ fn precompute_bar_colors(
 }
 
 ///|
-fn precompute_color_table(
-  bar_r : Array[Int32],
-  bar_g : Array[Int32],
-  bar_b : Array[Int32],
-  num_levels : Int32,
-) -> Array[String] {
-  let num_bars = bar_r.length()
-  let table = Array::make(num_bars * num_levels, "")
-  for bar in 0..<num_bars {
-    let bar_offset = bar * num_levels
-    for level in 0..<num_levels {
-      // Brightness range: 0.15 (deep dark) -> 1.0 (full bright)
-      let brightness = 0.15 +
-        level.to_double() / (num_levels - 1).to_double() * 0.85
-      let r = (bar_r[bar].to_double() * brightness)
-        .clamp(min=0.0, max=255.0)
-        .to_int()
-      let g = (bar_g[bar].to_double() * brightness)
-        .clamp(min=0.0, max=255.0)
-        .to_int()
-      let b = (bar_b[bar].to_double() * brightness)
-        .clamp(min=0.0, max=255.0)
-        .to_int()
-      table[bar_offset + level] = "\u001b[38;2;\{r};\{g};\{b}m"
-    }
-  }
-  table
-}
 
 ///|
-/// Recompute color table in-place with a hue offset for rainbow animation.
-/// Called once per frame — 60 hsl_to_rgb + 1920 string ops, ~0.05ms.
-fn rotate_hue(ctx : DisplayContext, hue_offset : Double) -> Unit {
-  let num_bars = ctx.num_bars
+/// Precompute 40 color tables with hue rotation (3 degrees per step).
+/// 40 tables × 60 bars × 32 levels = 76,800 strings (~1.5MB) at startup.
+/// Per-frame: zero allocations — just swap the table index.
+fn precompute_color_tables(
+  bar_hues : Array[Double],
+  bar_sats : Array[Double],
+  bar_lights : Array[Double],
+  num_bars : Int32,
+  num_tables : Int32,
+  hue_step : Double,
+) -> Array[Array[String]] {
   let nbl = num_brightness_levels
-  let table = ctx.color_table
-  let hues = ctx.bar_hues
-  let sats = ctx.bar_sats
-  let lights = ctx.bar_lights
-  for bar in 0..<num_bars {
-    let hue = hues[bar] + hue_offset
-    let sat = sats[bar]
-    let light = lights[bar]
-    let (br, bg, bb) = hsl_to_rgb(hue, sat, light)
-    let bar_off = bar * nbl
-    for level in 0..<nbl {
-      let brightness = 0.15 + level.to_double() / (nbl - 1).to_double() * 0.85
-      let r = (br.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
-      let g = (bg.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
-      let b = (bb.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
-      table.unsafe_set(bar_off + level, "\u001b[38;2;\{r};\{g};\{b}m")
+  let tables = Array::make(num_tables, Array::make(0, ""))
+  for tbl_idx in 0..<num_tables {
+    let hue_offset = tbl_idx.to_double() * hue_step
+    let table = Array::make(num_bars * nbl, "")
+    for bar in 0..<num_bars {
+      let hue = bar_hues[bar] + hue_offset
+      let sat = bar_sats[bar]
+      let light = bar_lights[bar]
+      let (br, bg, bb) = hsl_to_rgb(hue, sat, light)
+      let bar_off = bar * nbl
+      for level in 0..<nbl {
+        let brightness = 0.15 + level.to_double() / (nbl - 1).to_double() * 0.85
+        let r = (br.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
+        let g = (bg.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
+        let b = (bb.to_double() * brightness).clamp(min=0.0, max=255.0).to_int()
+        table.unsafe_set(bar_off + level, "\u001b[38;2;\{r};\{g};\{b}m")
+      }
     }
+    tables[tbl_idx] = table
   }
+  tables
 }
 
 ///|
@@ -499,11 +481,11 @@ fn create_display_context(
       is_grid[gb] = true
     }
   }
-  let (bar_r, bar_g, bar_b, bar_hues, bar_sats, bar_lights) = precompute_bar_colors(
+  let (_, _, _, bar_hues, bar_sats, bar_lights) = precompute_bar_colors(
     num_bars,
   )
-  let color_table = precompute_color_table(
-    bar_r, bar_g, bar_b, num_brightness_levels,
+  let color_tables = precompute_color_tables(
+    bar_hues, bar_sats, bar_lights, num_bars, 40, 3.0,
   )
   // Row contribution: range [3.0, 17.0] for 32 brightness levels
   // Bottom rows dimmer, top rows brighter — 3D glow effect
@@ -531,7 +513,7 @@ fn create_display_context(
       let label = if hz >= 1000 { "\{hz / 1000}kHz" } else { "\{hz}Hz" }
       // Color from color_table at brightness level 18
       let bar_off = gb * num_brightness_levels
-      label_strings[gb] = color_table[bar_off + 18] + label + ansi_reset
+      label_strings[gb] = color_tables[0][bar_off + 18] + label + ansi_reset
     }
   }
   // Precompute dB scale labels — eliminates per-frame hsl_to_rgb calls
@@ -591,7 +573,8 @@ fn create_display_context(
     bin_starts,
     bin_ends,
     is_grid,
-    color_table,
+    color_tables,
+    color_table_idx: 0,
     row_contrib,
     height_factor,
     sample_rate,
@@ -601,9 +584,8 @@ fn create_display_context(
     db_scale_labels,
     waveform_colors: wf_tbl,
     bar_offsets: pre_bar_offsets,
-    bar_hues,
-    bar_sats,
-    bar_lights,
+    heights_d: Array::make(num_bars, 0.0),
+    peak_heights_d: Array::make(num_bars, 0.0),
   }
 }
 
@@ -874,7 +856,7 @@ fn render_spectrum(
   // --- Hoist loop-invariant values for all rendering sections below ---
   let height_factor = ctx.height_factor
   let nbl_minus_1 = num_brightness_levels - 1
-  let color_tbl = ctx.color_table
+  let color_tbl = ctx.color_tables.unsafe_get(ctx.color_table_idx)
   // Precompute bar * nbl offsets once (avoids multiplication per bar per row)
   let bar_offsets = ctx.bar_offsets
 
@@ -918,8 +900,8 @@ fn render_spectrum(
   // --- Render bars with precomputed color table (continuous, no gaps) ---
   // Precompute heights[bar] * height_factor once — avoids to_double + multiply
   // per bar per row (saves 2 ops × 60 bars × 20 rows = 2400 ops/frame)
-  let heights_d = Array::make(num_bars, 0.0)
-  let peak_heights_d = Array::make(num_bars, 0.0)
+  let heights_d = ctx.heights_d
+  let peak_heights_d = ctx.peak_heights_d
   for bar in 0..<num_bars {
     heights_d.unsafe_set(bar, heights[bar].to_double() * height_factor)
     peak_heights_d.unsafe_set(
