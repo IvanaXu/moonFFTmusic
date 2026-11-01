@@ -1,7 +1,7 @@
 # moonFFTmusic
 
 [![CI](https://github.com/IvanaXu/moonFFTmusic/actions/workflows/ci.yml/badge.svg)](https://github.com/IvanaXu/moonFFTmusic/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 > https://mooncakes.io/docs/IvanAXu/moonFFTmusic@0.1.0
 
@@ -109,7 +109,7 @@ cd moonFFTmusic
 ./run.sh
 
 # Specify a WAV file and FFT size
-./run.sh chord.wav 1024
+./run.sh assets/chord.wav 1024
 ```
 
 The script automatically generates a test WAV if the file doesn't exist,
@@ -121,14 +121,14 @@ builds the project, and starts the visualizer.
 cd moonFFTmusic
 
 # Step 1: Generate a test WAV file
-python3 gen_wav.py test.wav 440.0        # 440Hz sine wave (A4)
-python3 gen_wav.py chord.wav chord        # Chord: 220+440+880+2000Hz
+python3 scripts/gen_wav.py assets/test.wav 440.0     # 440Hz sine wave (A4)
+python3 scripts/gen_wav.py assets/chord.wav chord    # Chord: 220+440+880+2000Hz
 
 # Step 2: Build the project
 moon build --target native
 
 # Step 3: Run the visualizer
-moon run src/main test.wav 1024
+moon run src/main assets/test.wav 1024
 ```
 
 ### Method 3: Run the compiled binary directly
@@ -138,7 +138,7 @@ cd moonFFTmusic
 moon build --target native
 
 # Binary location after build
-./_build/native/debug/build/src/main/main.exe test.wav 1024
+./_build/native/debug/build/src/main/main.exe assets/test.wav 1024
 ```
 
 ### Using your own WAV files
@@ -270,12 +270,16 @@ moonFFTmusic/
 │   ├── wav.mbt               # WAV parser + tests
 │   ├── display.mbt           # ANSI renderer (18 effects, true-color, beat detection)
 │   └── main.mbt              # Entry point + SoA FFT loop + arg parsing + tests
-├── gen_wav.py                 # WAV file generator
-├── run.sh                     # Build & run script
+├── scripts/
+│   └── gen_wav.py              # WAV file generator
+├── assets/
+│   ├── chord.wav               # Demo chord WAV (220+440+880+2000Hz)
+│   └── test.wav                # Demo 440Hz sine WAV
+├── run.sh                       # Build & run script
 ├── moon.mod                   # Module definition
 └── README.md
 ```
 
 ## License
 
-MIT
+Apache License 2.0

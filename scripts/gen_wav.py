@@ -3,7 +3,11 @@
 
 import struct
 import math
+import os
 import sys
+
+# Frequencies of the demo chord: 220 + 440 + 880 + 2000 Hz
+CHORD_FREQUENCIES = [220.0, 440.0, 880.0, 2000.0]
 
 def generate_wav(filename, frequency=440.0, duration=2.0, sample_rate=44100, amplitude=0.8):
     """Generate a WAV file with a sine wave at the given frequency."""
@@ -16,6 +20,9 @@ def generate_wav(filename, frequency=440.0, duration=2.0, sample_rate=44100, amp
     block_align = num_channels * bits_per_sample // 8
     data_size = num_samples * block_align
     file_size = 36 + data_size
+
+    out_dir = os.path.dirname(os.path.abspath(filename))
+    os.makedirs(out_dir, exist_ok=True)
 
     with open(filename, 'wb') as f:
         # RIFF header
@@ -41,22 +48,33 @@ def generate_wav(filename, frequency=440.0, duration=2.0, sample_rate=44100, amp
         for i in range(num_samples):
             # Generate sine wave with slight harmonic for richer spectrum
             t = i / sample_rate
-            sample = amplitude * math.sin(2.0 * math.pi * frequency * t)
-            # Add a second harmonic at half amplitude
-            sample += 0.3 * amplitude * math.sin(2.0 * math.pi * frequency * 2 * t)
-            # Add a third harmonic
-            sample += 0.15 * amplitude * math.sin(2.0 * math.pi * frequency * 3 * t)
+            if isinstance(frequency, list):
+                # Mix all chord frequencies at equal amplitude
+                sample = sum(amplitude * math.sin(2.0 * math.pi * f * t)
+                             for f in frequency) * 0.25
+            else:
+                sample = amplitude * math.sin(2.0 * math.pi * frequency * t)
+                # Add a second harmonic at half amplitude
+                sample += 0.3 * amplitude * math.sin(2.0 * math.pi * frequency * 2 * t)
+                # Add a third harmonic
+                sample += 0.15 * amplitude * math.sin(2.0 * math.pi * frequency * 3 * t)
             # Clamp and convert to 16-bit
             sample = max(-1.0, min(1.0, sample))
             int_sample = int(sample * 32767)
             f.write(struct.pack('<h', int_sample))
 
     print(f"Generated: {filename}")
-    print(f"  Frequency: {frequency}Hz, Duration: {duration}s")
+    if isinstance(frequency, list):
+        print(f"  Frequencies: {'+'.join(f'{f:g}Hz' for f in frequency)}, Duration: {duration}s")
+    else:
+        print(f"  Frequency: {frequency}Hz, Duration: {duration}s")
     print(f"  Sample rate: {sample_rate}Hz, Samples: {num_samples}")
     print(f"  File size: {file_size + 8} bytes")
 
 if __name__ == '__main__':
-    output = sys.argv[1] if len(sys.argv) > 1 else 'test.wav'
-    freq = float(sys.argv[2]) if len(sys.argv) > 2 else 440.0
+    output = sys.argv[1] if len(sys.argv) > 1 else 'assets/test.wav'
+    if len(sys.argv) > 2 and sys.argv[2].lower() == 'chord':
+        freq = CHORD_FREQUENCIES
+    else:
+        freq = float(sys.argv[2]) if len(sys.argv) > 2 else 440.0
     generate_wav(output, frequency=freq)
