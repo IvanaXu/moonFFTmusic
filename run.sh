@@ -17,12 +17,12 @@ if [ ! -f "$WAV_FILE" ]; then
     python3 gen_wav.py "$WAV_FILE" 440.0
 fi
 
-# Build the project
-echo "Building moonFFTmusic..."
-moon build --target native
+# Build the project (release for best performance)
+echo "Building moonFFTmusic (release)..."
+moon build --target native --release
 
 # Run the visualizer
 echo "Starting spectrum visualizer..."
 echo "Press Ctrl+C to stop."
 echo ""
-moon run src/main "$WAV_FILE" "$FFT_SIZE"
+./_build/native/release/build/src/main/main.exe "$WAV_FILE" "$FFT_SIZE"
