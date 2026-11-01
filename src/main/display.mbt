@@ -147,6 +147,9 @@ struct BeatDetector {
   history_size : Int32
   mut beat_intensity : Double
   mut energy_sum : Double
+  // Number of samples actually written into energy_history so far (caps at
+  // history_size). Used so the average is taken over real data, not zero-padded.
+  mut filled : Int32
   // BPM estimation
   beat_intervals : Array[Double]
   mut beat_intervals_idx : Int32
@@ -164,6 +167,7 @@ fn BeatDetector::new(history_size : Int32) -> BeatDetector {
     history_size,
     beat_intensity: 0.0,
     energy_sum: 0.0,
+    filled: 0,
     beat_intervals: Array::make(8, 0.0),
     beat_intervals_idx: 0,
     beat_intervals_size: 8,
@@ -185,10 +189,19 @@ fn BeatDetector::update(
   self.energy_history[idx] = energy
   self.energy_sum += energy
   self.history_idx = (idx + 1) % self.history_size
-  let avg = self.energy_sum / self.history_size.to_double()
+  if self.filled < self.history_size {
+    self.filled = self.filled + 1
+  }
+  // Average over the samples collected so far. Dividing by the full window
+  // while it was still filling up under-estimated the average, which made
+  // steady sounds register as beats and flash the border/UI at startup.
+  let avg = self.energy_sum / self.filled.to_double()
   // Beat detection with cooldown: minimum 0.15s between beats
   let time_since_last = current_time - self.last_beat_time
-  let is_beat = energy > avg * 1.4 && energy > 0.001 && time_since_last > 0.15
+  let is_beat = self.filled >= 8 &&
+    energy > avg * 1.4 &&
+    energy > 0.001 &&
+    time_since_last > 0.15
   if is_beat {
     self.beat_intensity = 1.0
     // BPM estimation: record beat interval
@@ -878,14 +891,18 @@ fn render_spectrum(
   let note_name = freq_to_note(dominant_freq_int)
 
   // --- Beat glow border with flash effect ---
-  // Strong beat: bright white-yellow flash; medium: orange-red; calm: cyan
+  // Strong beat: bright white-yellow flash; clear beat: warm pulse;
+  // calm: soft cyan. The warm threshold was 0.1, but beat_intensity decays
+  // only ×0.92/frame, so the border stayed warm-red for ~1.5s at a time and
+  // clashed with the cool spectrum palette. Raised to 0.35 so the border
+  // returns to cyan between beats, and the calm color is a softer cyan.
   let beat_glow = if beat_intensity > 0.6 {
     // Flash: bright white-yellow on strong beats
     "\u001b[1;38;2;255;255;\{(180 + (beat_intensity * 75.0).to_int())}m"
-  } else if beat_intensity > 0.1 {
-    "\u001b[38;2;255;\{(beat_intensity * 200.0).to_int()};\{(beat_intensity * 100.0).to_int()}m"
+  } else if beat_intensity > 0.35 {
+    "\u001b[38;2;255;\{(60.0 + beat_intensity * 170.0).to_int()};\{(30.0 + beat_intensity * 90.0).to_int()}m"
   } else {
-    "\u001b[1;36m"
+    "\u001b[38;2;90;200;230m"
   }
   // Beat pulse: scale border thickness character on strong beats
   let border_char = if beat_intensity > 0.5 { "━" } else { "═" }
@@ -1131,7 +1148,7 @@ fn render_spectrum(
         sb.write_string(" ")
         label_pos = label_pos + 1
       }
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 18))
+      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(i) + 20))
       sb.write_string(label)
       sb.write_string(ansi_reset)
       label_pos = label_pos + label.length()
