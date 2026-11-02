@@ -140,6 +140,10 @@ struct DisplayContext {
   mut auto_gain : Double
   // Band meter colors (green→yellow→red, 10 levels)
   band_colors : Array[String]
+  // Band meter ranges in bar indices — perceptual split
+  // (BASS 20-250Hz, MID 250-2kHz, TREB 2kHz+)
+  band_starts : Array[Int32]
+  band_ends : Array[Int32]
   // Progress-bar colors (cool cyan→violet ramp along the bar)
   progress_colors : Array[String]
 }
@@ -406,6 +410,43 @@ fn freq_to_bar(
 }
 
 ///|
+/// Map perceptual frequency band boundaries to bar index ranges.
+/// BASS = 20-250Hz, MID = 250-2kHz, TREB = 2kHz+ (bars are log-spaced, so a
+/// fixed bar-count split puts most of the audible bass inside "MID").
+fn band_bar_ranges(
+  num_bars : Int32,
+  half_fft : Int32,
+  sample_rate : Int32,
+) -> (Array[Int32], Array[Int32]) {
+  let mut bass_end = freq_to_bar(250.0, num_bars, half_fft, sample_rate)
+  let mut mid_end = freq_to_bar(2000.0, num_bars, half_fft, sample_rate)
+  // Defensive monotonicity for extreme mappings (tiny displays, low rates)
+  if bass_end < 1 {
+    bass_end = 1
+  }
+  if bass_end > num_bars - 2 {
+    bass_end = num_bars - 2
+  }
+  if mid_end > num_bars - 1 {
+    mid_end = num_bars - 1
+  }
+  if mid_end <= bass_end {
+    mid_end = bass_end + 1
+  }
+  ([0, bass_end, mid_end], [bass_end, mid_end, num_bars])
+}
+
+///|
+/// Band meter level in 0..10 cells on an absolute dB scale.
+/// Full scale = fft_size/4: a unit-amplitude sine yields that magnitude
+/// through a Hann window. Display window is -60..0 dB, matching the RMS bar.
+fn band_level_db(max_val : Double, fft_size : Int32) -> Int32 {
+  if fft_size <= 0 || max_val <= 0.0 {
+    return 0
+  }
+  let db = 20.0 * @math.log10(max_val / (fft_size.to_double() / 4.0))
+  ((db + 60.0) / 60.0 * 10.0).to_int().clamp(min=0, max=10)
+}
 
 ///|
 /// Precompute spectrogram waterfall background cells (per bar × level).
@@ -528,67 +569,36 @@ fn render_piano_keyboard(
 }
 
 ///|
-/// Render frequency band meters — BASS / MID / TREBLE energy levels
+/// Render frequency band meters — BASS / MID / TREBLE energy levels.
+/// Ranges follow perceptual frequency splits (precomputed bar indices) and
+/// each meter shows the band's absolute loudness on a -60..0 dB window, so
+/// the meters agree with the spectrum instead of just ranking bands.
 fn render_band_meters(
   sb : StringBuilder,
   magnitudes : Array[Double],
-  num_bars : Int32,
+  band_starts : Array[Int32],
+  band_ends : Array[Int32],
+  fft_size : Int32,
   band_colors : Array[String],
 ) -> Unit {
-  // BASS: bars 0-9, MID: bars 10-29, TREBLE: bars 30-59
-  let mut bass_max = 0.0
-  for i in 0..<10 {
-    let m = magnitudes.unsafe_get(i)
-    if m > bass_max {
-      bass_max = m
-    }
-  }
-  let mut mid_max = 0.0
-  for i in 10..<30 {
-    let m = magnitudes.unsafe_get(i)
-    if m > mid_max {
-      mid_max = m
-    }
-  }
-  let mut treble_max = 0.0
-  for i in 30..<num_bars {
-    let m = magnitudes.unsafe_get(i)
-    if m > treble_max {
-      treble_max = m
-    }
-  }
-  // Normalize to the strongest band this frame. Raw FFT magnitudes are large
-  // (up to ~512), so the old absolute `max_val * 10` pegged every active band
-  // to full and the meters never showed gradation. Relative levels make the
-  // three bands comparable and allow partial fills to appear.
-  let frame_max = if bass_max > mid_max {
-    if bass_max > treble_max {
-      bass_max
-    } else {
-      treble_max
-    }
-  } else if mid_max > treble_max {
-    mid_max
-  } else {
-    treble_max
-  }
-  let bands = [("BASS", bass_max), ("MID ", mid_max), ("TREB", treble_max)]
+  // Per-band peak magnitude over its frequency range
+  let bands = [
+    ("BASS", band_starts.unsafe_get(0), band_ends.unsafe_get(0)),
+    ("MID ", band_starts.unsafe_get(1), band_ends.unsafe_get(1)),
+    ("TREB", band_starts.unsafe_get(2), band_ends.unsafe_get(2)),
+  ]
   sb.write_string("\u001b[90m      \u001b[0m")
-  for band_idx in 0..<3 {
-    let (label, max_val) = bands[band_idx]
-    sb.write_string("\u001b[90m\{label} \u001b[0m")
-    let level = if frame_max > 1.0e-6 {
-      let ratio = max_val / frame_max
-      if ratio > 1.0e-6 {
-        // 40 dB display window: strongest band = 10 cells, -40 dB = 0 cells
-        let db = 20.0 * @math.log10(ratio)
-        ((db + 40.0) / 40.0 * 10.0).to_int().clamp(min=0, max=10)
-      } else {
-        0
+  for band in bands {
+    let (label, start, end) = band
+    let mut max_val = 0.0
+    for i in start..<end {
+      let m = magnitudes.unsafe_get(i)
+      if m > max_val {
+        max_val = m
       }
-    } else {
-      0
     }
+    sb.write_string("\u001b[90m\{label} \u001b[0m")
+    let level = band_level_db(max_val, fft_size)
     for i in 0..<10 {
       if i < level {
         let color_idx = (i.to_double() / 9.0 * 9.0).to_int().clamp(min=0, max=9)
@@ -601,6 +611,39 @@ fn render_band_meters(
     sb.write_string(" ")
   }
   sb.write_string("\n")
+}
+
+///|
+test "band_bar_ranges splits bars at frequency boundaries" {
+  // Default mapping: 60 bars over 512 bins @ 44.1kHz — 250Hz ≈ bar 16,
+  // 2kHz ≈ bar 36, so the audible bass no longer lands inside "MID".
+  let (starts, ends) = band_bar_ranges(60, 512, 44100)
+  assert_eq(starts[0], 0)
+  assert_eq(ends[0], 16)
+  assert_eq(starts[1], 16)
+  assert_eq(ends[1], 36)
+  assert_eq(starts[2], 36)
+  assert_eq(ends[2], 60)
+}
+
+///|
+test "band_bar_ranges stays monotonic on tiny displays" {
+  let (starts, ends) = band_bar_ranges(8, 4, 8000)
+  assert_eq(starts[0], 0)
+  assert_true(ends[0] > starts[0])
+  assert_true(ends[1] > ends[0])
+  assert_true(ends[2] > ends[1])
+  assert_eq(ends[2], 8)
+}
+
+///|
+test "band_level_db maps magnitude onto 10-cell window" {
+  // fft_size=1024 → full scale magnitude = 256 (unit sine, Hann window)
+  assert_eq(band_level_db(0.0, 1024), 0)
+  assert_eq(band_level_db(256.0, 1024), 10)
+  assert_eq(band_level_db(128.0, 1024), 8)
+  assert_eq(band_level_db(2.56, 1024), 3)
+  assert_eq(band_level_db(0.0256, 1024), 0)
 }
 
 ///|
@@ -760,6 +803,10 @@ fn create_display_context(
     let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
     band_cols[i] = "\u001b[38;2;\{r};\{g};\{b}m"
   }
+  // Precompute perceptual band ranges (BASS/MID/TREB in bar indices)
+  let (band_starts, band_ends) = band_bar_ranges(
+    num_bars, half_fft, sample_rate,
+  )
   // Initialize spectrogram history (3 rows × num_bars)
   let spectro_hist = Array::makei(3, fn(_) { Array::make(num_bars, 0) })
   DisplayContext::{
@@ -790,6 +837,8 @@ fn create_display_context(
     spectrogram_bg_tables: spectro_bg_tables,
     auto_gain: 1.0,
     band_colors: band_cols,
+    band_starts,
+    band_ends,
     progress_colors,
   }
 }
@@ -1298,7 +1347,14 @@ fn render_spectrum(
   render_waveform(sb, waveform, num_bars, beat_pulse, ctx.waveform_colors)
 
   // --- Energy history sparkline (MoonBit `mut` circular buffer) ---
-  render_band_meters(sb, magnitudes, num_bars, ctx.band_colors)
+  render_band_meters(
+    sb,
+    magnitudes,
+    ctx.band_starts,
+    ctx.band_ends,
+    ctx.fft_size,
+    ctx.band_colors,
+  )
 
   // --- RMS meter ---
   let rms_db = if rms_value > 0.0 {
