@@ -40,6 +40,9 @@ async fn main {
       println("  wav_file:  path to WAV file (16-bit PCM)")
       println("  fft_size:  FFT window size, power of 2 (default: 1024)")
       println("")
+      println("Device:    GPU auto-selected when detected, CPU fallback")
+      println("  (CUDA_VISIBLE_DEVICES=-1 forces CPU)")
+      println("")
       println("Environment:")
       println("  LINES:     terminal height for auto-layout (default: 26)")
       println("")
@@ -66,6 +69,10 @@ async fn main {
     println("Valid sizes: 256, 512, 1024, 2048, 4096, ...")
     return
   }
+
+  // --- Device selection: GPU when detectable, CPU fallback ---
+  let device = select_device()
+  println("Compute device: \{device_label(device)}")
 
   // --- Check if WAV file exists ---
   guard @fs.exists(wav_path) else {

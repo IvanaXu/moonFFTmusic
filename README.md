@@ -156,6 +156,20 @@ moon run src/main /path/to/your/song.wav 2048
 | `wav_file` | Yes | — | Path to a 16-bit PCM WAV file |
 | `fft_size` | No | `1024` | FFT window size, must be power of 2 |
 
+### Compute device
+
+The device is **auto-selected at startup**: if a GPU is detectable it is
+loaded and reported, otherwise the visualizer falls back to CPU.
+
+| Detection | Node probed |
+|-----------|-------------|
+| NVIDIA | `/dev/nvidia0` … `/dev/nvidia15` |
+| AMD / Intel (DRM) | `/dev/dri/card0` … `card7`, `/dev/dri/renderD128` … `renderD135` |
+| CPU fallback | no GPU node found |
+
+`CUDA_VISIBLE_DEVICES=-1` (or empty) forces CPU even when a GPU is present.
+The chosen device is printed on startup, e.g. `Compute device: GPU (NVIDIA, /dev/nvidia0)`.
+
 Valid FFT sizes: `256`, `512`, `1024`, `2048`, `4096`, `8192`, ...
 
 Larger FFT sizes give better frequency resolution but slower time response.
