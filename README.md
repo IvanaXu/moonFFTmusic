@@ -179,7 +179,7 @@ Smaller sizes give better time resolution but coarser frequency bins.
 
 ```
 ╔━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╗
-║ 🎵 MoonFFTmusic — Real-time Spectrum Analyzer                  ║
+║         🎵 MoonFFTmusic — Real-time Spectrum Analyzer          ║
 ║ 44100Hz | FFT 1024 | Peak 43Hz (F1-) ♫ | 120 BPM | 0:1.0       ║
 ╚━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╝
 │     ╱────╱╱──────────────╲╲∨╱╱──╲╲╲────────────────╱──∨──╲──────

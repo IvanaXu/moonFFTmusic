@@ -1231,8 +1231,17 @@ fn render_spectrum(
     sb.write_string(border_char)
   }
   sb.write_string("╗\n║ ")
+  // Centre the title inside the frame: the live info row below is dense, so a
+  // centred title keeps the two header rows visually balanced.
+  let title_lead = ((text_width - display_width(title)) / 2).clamp(
+    min=0,
+    max=text_width,
+  )
+  for _ in 0..<title_lead {
+    sb.write_string(" ")
+  }
   sb.write_string(title)
-  let title_pad = (text_width - display_width(title)).clamp(
+  let title_pad = (text_width - display_width(title) - title_lead).clamp(
     min=0,
     max=header_width,
   )
