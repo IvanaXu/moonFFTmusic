@@ -135,6 +135,8 @@ struct DisplayContext {
   // Stable (non-rotating) colors for the frequency axis labels
   label_colors : Array[String]
   db_scale_labels : Array[String]
+  // Precomputed spectrum baseline (L-shaped axis corner + filler dashes, 66 cols)
+  spectrum_baseline : String
   waveform_colors : Array[String]
   bar_offsets : Array[Int32]
   // Spectrogram waterfall: 3 rows of history
@@ -859,6 +861,13 @@ fn create_display_context(
   )
   // Initialize spectrogram history (3 rows × num_bars)
   let spectro_hist = Array::makei(3, fn(_) { Array::make(num_bars, 0) })
+  // Precompute the spectrum baseline: "└" closes the left axis, then dashes
+  // fill the remaining 65 columns so the row stays at the standard 66.
+  let mut baseline = "\u001b[38;2;70;70;90m└"
+  for _ in 0..<(num_bars + 5) {
+    baseline = baseline + "─"
+  }
+  baseline = baseline + ansi_reset
   DisplayContext::{
     num_bars,
     max_height,
@@ -878,6 +887,7 @@ fn create_display_context(
     label_strings,
     label_colors,
     db_scale_labels,
+    spectrum_baseline: baseline,
     waveform_colors: wf_tbl,
     bar_offsets: pre_bar_offsets,
     heights_d: Array::make(num_bars, 0.0),
@@ -1396,6 +1406,10 @@ fn render_spectrum(
     sb.write_string(ansi_reset)
     sb.write_string("\n")
   }
+
+  // --- Spectrum baseline — closes the left axis under the last bar row ---
+  sb.write_string(ctx.spectrum_baseline)
+  sb.write_string("\n")
 
   // --- Spectrogram waterfall: 3 rows of recent spectrum history ---
   // Each row shows a previous frame; hue = frequency (matches the bars),

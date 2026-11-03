@@ -96,9 +96,10 @@ async fn main {
   // --- Display configuration ---
   let num_bars = 60
   // Auto-detect terminal height to prevent scroll flicker.
-  // Fixed overhead per frame: 4(header) + 1(peak) + 1(trail) + 3(glow)
-  //   + 1(labels) + 1(waveform) + 1(sparkline) + 1(RMS) + 1(progress) = 14
-  // max_height = terminal_lines - 14, clamped to [8, 40]
+  // Fixed overhead per frame: 4(header) + 1(connector) + 1(piano) + 1(baseline)
+  //   + 3(waterfall) + 1(labels) + 1(waveform) + 1(bands) + 1(RMS)
+  //   + 1(progress) = 15
+  // max_height = terminal_lines - 15, clamped to [8, 40]
   let max_height = match @env.get_env_var("LINES") {
     Some(s) => {
       // Parse LINES env var to int
@@ -111,12 +112,12 @@ async fn main {
         }
       }
       if valid {
-        (lines - 14).clamp(min=8, max=40)
+        (lines - 15).clamp(min=8, max=40)
       } else {
         12
       }
     }
-    None => 12 // default: fits 26-line terminal
+    None => 11 // default: fits 26-line terminal
   }
   let sub_res = 8
   // Frame pacing: ~real-time playback at ~20 fps.
