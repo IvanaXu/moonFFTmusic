@@ -549,7 +549,8 @@ fn render_piano_keyboard(
   }
   let pad_left = ((width - content_width) / 2).clamp(min=0, max=width)
   let pad_right = (width - content_width - pad_left).clamp(min=0, max=width)
-  sb.write_string("\u001b[90m      \u001b[0m")
+  // Keep the left axis continuous through the keyboard row as well.
+  sb.write_string("\u001b[38;2;70;70;90m│     \u001b[0m")
   for _ in 0..<pad_left {
     sb.write_string(" ")
   }
@@ -1281,7 +1282,9 @@ fn render_spectrum(
   let bar_offsets = ctx.bar_offsets
 
   // --- Peak marker row with bar top connectors (MoonBit `match` dispatch) ---
-  sb.write_string("\u001b[90m      \u001b[0m")
+  // The left axis also runs through this row so the frame is continuous from
+  // the header corner down to the baseline (6-column gutter is preserved).
+  sb.write_string("\u001b[38;2;70;70;90m│     \u001b[0m")
   for bar in 0..<num_bars {
     if bar == dom_bar && heights[bar] > 0 {
       sb.write_string("\u001b[1;33m▼\u001b[0m")
