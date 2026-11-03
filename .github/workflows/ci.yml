@@ -1,24 +1,20 @@
 # =============================================================================
 # CI — Build, Test, and Integration Check for moonFFTmusic
 # =============================================================================
-# Runs on every push and pull_request to main.
-# Matrix: Ubuntu + macOS (native target only — project uses file I/O).
-# Steps:
-#   1. Install MoonBit CLI (official installer)
-#   2. moon check   — type check, deny warnings
-#   3. moon fmt      — format check, fail if diff
-#   4. moon build    — native compilation
-#   5. moon test     — run 25 inline test blocks
-#   6. Integration   — generate WAV, run visualizer, verify output
+# Runs on every push to main/dev branches and on every pull request.
+# Checks (3 total, down from 5):
+#   1-2. Build & Test — Ubuntu + macOS: check, fmt, build, test
+#   3.   Integration  — Ubuntu: run the visualizer against generated WAV files
+#
+# No dependency sync step is needed: this module has no external packages.
 # =============================================================================
 
 name: CI
 
 on:
   push:
-    branches: [main, master, dev]
+    branches: [main, master, dev, dev*]
   pull_request:
-    branches: [main, master, dev]
 
 # Cancel superseded runs for the same branch/PR
 concurrency:
@@ -27,42 +23,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Job 1: Type check + format check (fast, runs first)
-  # ---------------------------------------------------------------------------
-  check:
-    name: Check & Format (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-      fail-fast: false
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install MoonBit CLI
-        shell: bash
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> $GITHUB_PATH
-
-      - name: Verify installation
-        run: moon version --all
-
-      - name: Update registry
-        run: moon update
-
-      - name: Type check (deny warnings)
-        timeout-minutes: 5
-        run: moon check --target native --deny-warn
-
-      - name: Format check
-        timeout-minutes: 5
-        run: |
-          moon fmt
-          git diff --exit-code
-
-  # ---------------------------------------------------------------------------
-  # Job 2: Build + unit tests (inline test blocks)
+  # Job 1+2: Type check, format check, build, and unit tests
   # ---------------------------------------------------------------------------
   build-test:
     name: Build & Test (${{ matrix.os }})
@@ -78,13 +39,18 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
       - name: Verify installation
         run: moon version --all
 
-      - name: Update registry
-        run: moon update
+      - name: Type check (deny warnings)
+        timeout-minutes: 5
+        run: moon check --target native --deny-warn
+
+      - name: Format check
+        timeout-minutes: 5
+        run: moon fmt --check
 
       - name: Build (native)
         timeout-minutes: 10
@@ -107,13 +73,10 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
       - name: Verify installation
         run: moon version --all
-
-      - name: Update registry
-        run: moon update
 
       - name: Build (native)
         timeout-minutes: 10
@@ -151,9 +114,9 @@ jobs:
       - name: Run visualizer with 440Hz WAV
         timeout-minutes: 2
         run: |
-          # 0.5s audio with FFT 1024: ~43 hops * 50ms sleep + 500ms init ≈ 2.7s
-          timeout 10 moon run src/main test_440.wav 1024 > output_440.txt 2>&1 || true
-          # Verify the visualizer produced output with expected header
+          # 0.5s audio with FFT 1024: ~43 hops * 50ms sleep + startup ≈ 3s.
+          # The generous timeout also covers incremental native linking.
+          timeout 30 moon run src/main test_440.wav 1024 > output_440.txt 2>&1 || true
           grep -q "MoonFFTmusic" output_440.txt
           grep -q "Sample rate: 44100Hz" output_440.txt
           grep -q "Playback complete" output_440.txt
@@ -162,7 +125,7 @@ jobs:
       - name: Run visualizer with chord WAV
         timeout-minutes: 2
         run: |
-          timeout 10 moon run src/main test_chord.wav 1024 > output_chord.txt 2>&1 || true
+          timeout 30 moon run src/main test_chord.wav 1024 > output_chord.txt 2>&1 || true
           grep -q "MoonFFTmusic" output_chord.txt
           grep -q "Playback complete" output_chord.txt
           echo "✅ Chord integration test passed"
@@ -171,7 +134,7 @@ jobs:
         timeout-minutes: 5
         run: |
           for size in 256 512 2048 4096; do
-            timeout 15 moon run src/main test_440.wav $size > /dev/null 2>&1 || true
+            timeout 30 moon run src/main test_440.wav $size > /dev/null 2>&1 || true
             echo "✅ FFT size $size ran without crash"
           done
 

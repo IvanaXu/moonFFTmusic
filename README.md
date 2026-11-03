@@ -271,7 +271,7 @@ This project leverages MoonBit-specific features for performance and safety:
 | `Double::clamp` / `Int32::clamp` | Safe value clamping with labeled arguments |
 | `match` patterns | Chunk type dispatch, arg parsing, bar render states, HSL→RGB |
 | `guard` patterns | Early return on file not found / parse failure |
-| `test` blocks | 25 inline tests for FFT correctness, SoA FFT, WAV parsing, args |
+| `test` blocks | 32 inline tests for FFT correctness, SoA FFT, WAV parsing, args |
 | `enum` + `match` | `ChunkType`/`BarState` enums for dispatch |
 | `mut` struct fields | Mutable `BeatDetector` state (history_idx, beat_intensity) |
 | Bit tricks | `n & (n-1)` for power-of-2 check, bit-reversal permutation |
@@ -281,26 +281,24 @@ This project leverages MoonBit-specific features for performance and safety:
 ## Testing
 
 ```bash
-# Run all 25 inline tests
+# Run all 32 inline tests
 moon test --target native
 
 # Type check with no warnings
 moon check --target native --deny-warn
 
 # Format check
-moon fmt && git diff --exit-code
+moon fmt --check
 ```
 
 ## CI
 
-GitHub Actions CI runs on every push and pull request:
+GitHub Actions CI runs on every push to `main`/`dev*` and on every pull request.
 
-1. **Check & Format** — `moon check --deny-warn` + `moon fmt` diff check
-2. **Build & Test** — `moon build` + `moon test` (25 inline tests)
-3. **Integration** — Generate WAV files, run visualizer, verify output, test
-   multiple FFT sizes, verify error handling
-
-Matrix: Ubuntu + macOS (native target only).
+1. **Build & Test** (Ubuntu + macOS) — `moon check --deny-warn`, `moon fmt --check`,
+   `moon build`, `moon test` (32 inline tests)
+2. **Integration** (Ubuntu) — Generate WAV files, run visualizer, verify output,
+   test multiple FFT sizes, verify error handling
 
 ## Project Structure
 
