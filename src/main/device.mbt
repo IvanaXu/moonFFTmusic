@@ -14,17 +14,19 @@
 
 ///|
 /// A detected GPU device: vendor label + device node path
+#derive(Debug)
 struct GpuInfo {
   vendor : String
   node : String
-} derive(Debug)
+}
 
 ///|
 /// Compute device chosen at startup
+#derive(Debug)
 enum ComputeDevice {
   Gpu(GpuInfo)
   Cpu
-} derive(Debug)
+}
 
 ///|
 /// Candidate device nodes probed in priority order (NVIDIA first)

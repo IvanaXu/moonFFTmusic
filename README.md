@@ -263,7 +263,7 @@ This project leverages MoonBit-specific features for performance and safety:
 
 | Feature | Usage |
 |---------|-------|
-| `derive(Debug)` | Auto-generated debug output for `Complex` and `WavData` structs |
+| `#derive(Debug)` | Auto-generated debug output for `Complex`, `WavData`, `GpuInfo`, `ComputeDevice` |
 | `Array::unsafe_get`/`unsafe_set` | Bypass bounds check in FFT butterfly hot loop (SoA) |
 | `Array::mapi_in_place` | In-place Hann window application (Complex path) |
 | `Array::makei` | Functional array construction for precomputed tables |
@@ -295,8 +295,9 @@ moon fmt --check
 
 GitHub Actions CI runs on every push to `main`/`dev*` and on every pull request.
 
-1. **Build & Test** (Ubuntu + macOS) — `moon check --deny-warn`, `moon fmt --check`,
-   `moon build`, `moon test` (32 inline tests)
+1. **Build & Test** (Ubuntu + macOS) — `moon check` and `moon fmt --check` run as
+   advisory checks (toolchain version drift must not fail CI); `moon build` and
+   `moon test` (32 inline tests) are blocking
 2. **Integration** (Ubuntu) — Generate WAV files, run visualizer, verify output,
    test multiple FFT sizes, verify error handling
 
