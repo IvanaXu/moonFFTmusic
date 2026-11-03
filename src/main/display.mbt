@@ -1397,12 +1397,20 @@ fn render_spectrum(
 
   // --- Spectrogram waterfall: 3 rows of recent spectrum history ---
   // Each row shows a previous frame; hue = frequency (matches the bars),
-  // brightness = intensity. Row 0 = most recent, Row 2 = oldest.
+  // brightness = intensity and age. Row 0 = most recent, Row 2 = oldest.
   let spectro_hist = ctx.spectrogram_history
   let spectro_idx = ctx.spectrogram_idx
   let spectro_tbl = ctx.spectrogram_bg_tables.unsafe_get(ctx.color_table_idx)
   for row in 0..<3 {
     sb.write_string("\u001b[90m      \u001b[0m")
+    // Age cue: the newest history row gets +2 brightness levels, the oldest
+    // -3. The table's hue shifts only ~1.1°/level, so frequency colour stays
+    // continuous while the three rows read as a time sequence.
+    let age_offset = match row {
+      0 => 2
+      1 => 0
+      _ => -3
+    }
     // Get the historical frame: row 0 = most recent (current frame - 1)
     // row 1 = 2 frames ago, row 2 = 3 frames ago
     let hist_idx = (spectro_idx - 1 - row + 3) % 3
@@ -1410,9 +1418,10 @@ fn render_spectrum(
     for bar in 0..<num_bars {
       let h = hist_row.unsafe_get(bar)
       if h > 0 {
-        let level = (h.to_double() * height_factor + 3.0)
-          .to_int()
-          .clamp(min=0, max=nbl_minus_1)
+        let level = ((h.to_double() * height_factor + 3.0).to_int() + age_offset).clamp(
+          min=0,
+          max=nbl_minus_1,
+        )
         sb.write_string(
           spectro_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level),
         )
