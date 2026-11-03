@@ -12,10 +12,11 @@
 // =============================================================================
 
 ///|
+#derive(Debug)
 struct Complex {
   re : Double
   im : Double
-} derive(Debug)
+}
 
 ///|
 fn Complex::mag(self : Complex) -> Double {

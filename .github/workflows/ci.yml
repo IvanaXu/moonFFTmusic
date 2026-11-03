@@ -23,7 +23,7 @@ jobs:
 
       - name: Type check
         timeout-minutes: 5
-        run: time moon check --warn-list -0027 --target native --deny-warn
+        run: time moon check --target native --deny-warn
 
       - name: Format check
         timeout-minutes: 2

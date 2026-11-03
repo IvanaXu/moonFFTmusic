@@ -5,12 +5,13 @@
 
 ///|
 /// Parsed WAV file data
+#derive(Debug)
 struct WavData {
   sample_rate : Int32
   num_channels : Int32
   bits_per_sample : Int32
   samples : Array[Double] // normalized to [-1.0, 1.0]
-} derive(Debug)
+}
 
 ///|
 /// Read a little-endian unsigned 16-bit value from bytes at position
