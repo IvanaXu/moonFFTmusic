@@ -154,6 +154,8 @@ struct DisplayContext {
   // (BASS 20-250Hz, MID 250-2kHz, TREB 2kHz+)
   band_starts : Array[Int32]
   band_ends : Array[Int32]
+  // Smoothed RMS level in dB (IIR across frames, starts at meter floor)
+  mut rms_level : Double
   // Progress-bar colors (cool cyan→violet ramp along the bar)
   progress_colors : Array[String]
 }
@@ -910,6 +912,7 @@ fn create_display_context(
     auto_gain: 1.0,
     band_colors: band_cols,
     band_levels: Array::make(3, 0.0),
+    rms_level: -60.0,
     band_starts,
     band_ends,
     progress_colors,
@@ -1520,18 +1523,25 @@ fn render_spectrum(
   )
 
   // --- RMS meter ---
-  let rms_db = if rms_value > 0.0 {
+  let raw_db = if rms_value > 0.0 {
     20.0 * @math.log10(rms_value)
   } else {
     -99.0
   }
-  let rms_pct = if rms_value > 0.0 {
-    ((rms_db + 60.0) / 60.0).clamp(min=0.0, max=1.0)
+  // IIR smoothing (fast attack / slow release), the same VU-meter character
+  // as the band meters — raw per-frame RMS can jump ~15dB on a transient hit,
+  // which made the 44-cell bar lurch by 10+ cells in a single frame.
+  let rms_db = if raw_db >= ctx.rms_level {
+    ctx.rms_level * 0.55 + raw_db * 0.45
   } else {
-    0.0
+    ctx.rms_level * 0.85 + raw_db * 0.15
   }
+  ctx.rms_level = rms_db
+  let rms_pct = ((rms_db + 60.0) / 60.0).clamp(min=0.0, max=1.0)
   let meter_width = ctx.meter_colors.length()
-  let meter_filled = (rms_pct * meter_width.to_double()).to_int()
+  let meter_filled = (rms_pct * meter_width.to_double() + 0.5)
+    .to_int()
+    .clamp(min=0, max=meter_width)
 
   // RMS meter with beat-reactive glow
   let rms_glow = if beat_pulse > 0.5 { "\u001b[1;33m" } else { "\u001b[1;37m" }
