@@ -272,7 +272,7 @@ fn BeatDetector::update(
 
 ///|
 /// Bar top connector character — based on height difference with neighbors.
-/// Uses MoonBit `match` for character selection: ─ ╱ ╲ ╳
+/// Uses MoonBit `match` for character selection: ─ ╱ ╲ ∧ ∨
 fn connector_char(left_h : Int32, curr_h : Int32, right_h : Int32) -> String {
   let diff_r = right_h - curr_h
   let diff_l = curr_h - left_h
@@ -281,8 +281,10 @@ fn connector_char(left_h : Int32, curr_h : Int32, right_h : Int32) -> String {
   match (diff_l, diff_r) {
     (dl, dr) if dl > 6 && dr > 6 => "╱" // rising →
     (dl, dr) if dl < -6 && dr < -6 => "╲" // falling →
-    (dl, dr) if dl > 6 && dr < -6 => "╳" // peak
-    (dl, dr) if dl < -6 && dr > 6 => "╳" // valley
+    // Peak and valley used to share "╳", so the contour did not read as an
+    // envelope. ∧ sits above and ∨ below, making the shape unambiguous.
+    (dl, dr) if dl > 6 && dr < -6 => "∧" // peak
+    (dl, dr) if dl < -6 && dr > 6 => "∨" // valley
     _ => "─" // similar height — flat connector
   }
 }
