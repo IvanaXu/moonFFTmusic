@@ -951,6 +951,8 @@ fn is_ref_line(row : Int32, max_height : Int32) -> Bool {
 
 ///|
 /// Render waveform strip with true-color amplitude-based coloring.
+/// The window is auto-scaled to its own peak so quiet passages still reveal the
+/// waveform shape; absolute loudness is already carried by the RMS meter.
 fn render_waveform(
   sb : StringBuilder,
   waveform : Array[Double],
@@ -964,12 +966,23 @@ fn render_waveform(
     sb.write_string("\n")
     return
   }
+  // Without auto-scaling, `sample * 4` truncated to 0 for |sample| < 0.25,
+  // collapsing most frames into a flat "─" line. Normalize to the window peak
+  // so the strip always shows its shape; a small gate keeps silence flat.
+  let mut peak_abs = 0.0
+  for j in 0..<n {
+    let a = waveform.unsafe_get(j).abs()
+    if a > peak_abs {
+      peak_abs = a
+    }
+  }
+  let gain = if peak_abs > 0.005 { 1.0 / peak_abs } else { 0.0 }
   let step = n.to_double() / width.to_double()
   let has_beat = pulse > 0.3
   for i in 0..<width {
     let sample_idx = (i.to_double() * step).to_int().clamp(min=0, max=n - 1)
-    let sample = waveform[sample_idx]
-    let scaled = (sample * 4.0).clamp(min=-4.0, max=4.0).to_int()
+    let sample = waveform[sample_idx] * gain
+    let scaled = (sample * 4.0).round().to_int().clamp(min=-4, max=4)
     let abs_amp = sample.abs().clamp(min=0.0, max=1.0)
     let amp_int = (abs_amp * 255.0).to_int().clamp(min=0, max=255)
     // Precomputed table: index = (scaled + 4) * 256 + amp_int
