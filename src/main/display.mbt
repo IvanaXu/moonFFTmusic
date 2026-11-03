@@ -148,6 +148,8 @@ struct DisplayContext {
   mut auto_gain : Double
   // Band meter colors (green→yellow→red, 10 levels)
   band_colors : Array[String]
+  // Smoothed band meter levels (0..10 dB scale, IIR across frames)
+  band_levels : Array[Double]
   // Band meter ranges in bar indices — perceptual split
   // (BASS 20-250Hz, MID 250-2kHz, TREB 2kHz+)
   band_starts : Array[Int32]
@@ -614,6 +616,7 @@ fn render_band_meters(
   band_ends : Array[Int32],
   fft_size : Int32,
   band_colors : Array[String],
+  band_levels : Array[Double],
 ) -> Unit {
   // Per-band peak magnitude over its frequency range.
   // Labels are padded to a fixed 5 columns so BASS/MID/TREB meters line up.
@@ -625,8 +628,8 @@ fn render_band_meters(
   // Left gutter matches the 6-column dB scale, so all status rows start at
   // the same column as the spectrum body.
   sb.write_string("\u001b[90m      \u001b[0m")
-  for band in bands {
-    let (label, start, end) = band
+  for idx in 0..<3 {
+    let (label, start, end) = bands[idx]
     let mut max_val = 0.0
     for i in start..<end {
       let m = magnitudes.unsafe_get(i)
@@ -635,12 +638,20 @@ fn render_band_meters(
       }
     }
     sb.write_string("\u001b[90m\{label}\u001b[0m")
-    let level = band_level_db(max_val, fft_size)
-    // band_level_db is a 0..10 scale; stretch it across 14 cells.
-    let filled = (level * band_meter_cells / 10).clamp(
-      min=0,
-      max=band_meter_cells,
-    )
+    // IIR smoothing (fast attack / slow release) so the meters move like
+    // needle VU meters instead of jumping cell-to-cell with the raw frame.
+    let raw = band_level_db(max_val, fft_size).to_double()
+    let prev = band_levels.unsafe_get(idx)
+    let smoothed = if raw >= prev {
+      prev * 0.55 + raw * 0.45
+    } else {
+      prev * 0.85 + raw * 0.15
+    }
+    band_levels.unsafe_set(idx, smoothed)
+    // 0..10 dB scale stretched across 14 cells, rounded.
+    let filled = (smoothed * band_meter_cells.to_double() / 10.0 + 0.5)
+      .to_int()
+      .clamp(min=0, max=band_meter_cells)
     for i in 0..<band_meter_cells {
       if i < filled {
         let color_idx = (i.to_double() /
@@ -898,6 +909,7 @@ fn create_display_context(
     spectrogram_bg_tables: spectro_bg_tables,
     auto_gain: 1.0,
     band_colors: band_cols,
+    band_levels: Array::make(3, 0.0),
     band_starts,
     band_ends,
     progress_colors,
@@ -1504,6 +1516,7 @@ fn render_spectrum(
     ctx.band_ends,
     ctx.fft_size,
     ctx.band_colors,
+    ctx.band_levels,
   )
 
   // --- RMS meter ---
