@@ -777,12 +777,12 @@ fn create_display_context(
     }
   }
   // Precompute dB scale labels — eliminates per-frame hsl_to_rgb calls.
-  // Labels are all exactly 5 columns wide so every spectrum row starts at the
-  // same left column (a width mismatch used to shift -12dB rows by 1 column).
-  // Each tick is emitted only once (a naive row*5/height repeats ticks,
-  // producing e.g. three identical "0dB" labels in a 12-row display).
+  // Every row keeps the "│" axis at column 0 (labels sit inside the axis), so
+  // the left scale no longer breaks on the five tick rows. Each tick is
+  // emitted only once (a naive row*5/height repeats ticks, producing e.g.
+  // three identical "0dB" labels in a 12-row display).
   let db_scale_labels = Array::make(max_height, "")
-  let labels = ["  0dB", " -6dB", "-12dB", "-18dB", "-24dB"]
+  let labels = ["0dB", "-6dB", "-12dB", "-18dB", "-24dB"]
   let mut prev_label_row = -1
   for row in 0..<max_height {
     let label_row = row * 5 / max_height
@@ -792,10 +792,17 @@ fn create_display_context(
       // instrument axis instead of five unrelated colors.
       let light = 0.64 - label_row.to_double() * 0.06
       let (r, g, b) = hsl_to_rgb(228.0, 0.28, light)
-      db_scale_labels[row] = "\u001b[38;2;\{r};\{g};\{b}m" +
-        labels[label_row] +
-        ansi_reset +
-        " "
+      let label = labels[label_row]
+      let mut text = "\u001b[38;2;70;70;90m│\u001b[0m" +
+        "\u001b[38;2;\{r};\{g};\{b}m" +
+        label +
+        ansi_reset
+      // Pad the 5-column label field inside the axis (6 cols total).
+      let pad = (5 - label.length()).clamp(min=0, max=5)
+      for _ in 0..<pad {
+        text = text + " "
+      }
+      db_scale_labels[row] = text
     } else {
       db_scale_labels[row] = "\u001b[38;2;70;70;90m│    \u001b[0m "
     }
