@@ -491,7 +491,11 @@ fn precompute_spectro_bg_tables(
       let bar_off = bar * nbl
       for level in 0..<nbl {
         let lr = level.to_double() / (nbl - 1).to_double()
-        let brightness = 0.15 + lr * 0.66
+        // History stays dimmer than the live bars, but the old range
+        // (0.15..0.81) rendered short history cells at RGB ≈ 40 luminance —
+        // effectively invisible on a dark terminal. This range lifts the
+        // floor while keeping the same hue and the "recedes" ordering.
+        let brightness = 0.24 + lr * 0.82
         let r = ((br0.to_double() + (br1 - br0).to_double() * lr) * brightness)
           .clamp(min=0.0, max=255.0)
           .to_int()
