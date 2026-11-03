@@ -7,6 +7,7 @@ on:
 
 jobs:
   test:
+    name: Clean, Check, Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,5 +17,22 @@ jobs:
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
+      - name: Clean build cache
+        timeout-minutes: 2
+        run: moon clean
+
+      - name: Type check
+        timeout-minutes: 5
+        run: time moon check --target native --deny-warn
+
+      - name: Format check
+        timeout-minutes: 2
+        run: time moon fmt --check
+
+      - name: Build
+        timeout-minutes: 10
+        run: time moon build --target native
+
       - name: Run tests
-        run: moon test --target native
+        timeout-minutes: 10
+        run: time moon test --target native
