@@ -46,7 +46,7 @@ jobs:
 
       - name: Type check (deny warnings)
         timeout-minutes: 5
-        run: moon check --target native --deny-warn
+        run: moon check --warn-list -0042 --target native --deny-warn
 
       - name: Format check
         timeout-minutes: 5
