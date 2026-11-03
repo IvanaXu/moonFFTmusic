@@ -554,11 +554,13 @@ fn render_piano_keyboard(
     let midi = start_midi + i
     let is_black = piano_key_is_black(i)
     if midi == dom_midi {
-      // Detected note — bright yellow highlight
-      sb.write_string("\u001b[1;33m\u{25BC}\u001b[0m")
+      // Detected note — solid yellow bar keeps the key shape readable
+      // (the old ▼ glyph replaced a key and broke the keyboard pattern).
+      sb.write_string("\u001b[1;33m\u{25AE}\u001b[0m")
     } else if is_black {
-      // Black key — medium purple (brightened for visibility on dark terminals)
-      sb.write_string("\u001b[38;2;120;90;155m\u{2502}\u001b[0m")
+      // Black key — thin left-edge block reads as the narrower key,
+      // instead of every key looking like the same "│" stick.
+      sb.write_string("\u001b[38;2;120;90;155m\u{258F}\u001b[0m")
     } else {
       // White key — cool blue-gray (brightened for visibility)
       sb.write_string("\u001b[38;2;100;110;140m\u{2502}\u001b[0m")
