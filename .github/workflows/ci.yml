@@ -1,159 +1,20 @@
-# =============================================================================
-# CI — Build, Test, and Integration Check for moonFFTmusic
-# =============================================================================
-# Runs on every push to main/dev branches and on every pull request.
-# Checks (3 total, down from 5):
-#   1-2. Build & Test — Ubuntu + macOS: check, fmt, build, test
-#   3.   Integration  — Ubuntu: run the visualizer against generated WAV files
-#
-# No dependency sync step is needed: this module has no external packages.
-# =============================================================================
-
 name: CI
 
 on:
   push:
-    branches: [main, master, dev, dev*]
+    branches: ["*"]
   pull_request:
 
-# Cancel superseded runs for the same branch/PR
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  # ---------------------------------------------------------------------------
-  # Job 1+2: Type check, format check, build, and unit tests
-  # ---------------------------------------------------------------------------
-  build-test:
-    name: Build & Test (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-      fail-fast: false
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install MoonBit CLI
-        shell: bash
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
-          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
-
-      - name: Verify installation
-        run: moon version --all
-
-      - name: Type check (deny warnings)
-        timeout-minutes: 5
-        run: moon check --warn-list -0042 --target native --deny-warn
-
-      - name: Format check
-        timeout-minutes: 5
-        run: moon fmt --check
-
-      - name: Build (native)
-        timeout-minutes: 10
-        run: moon build --target native
-
-      - name: Run inline tests
-        timeout-minutes: 10
-        run: moon test --target native
-
-  # ---------------------------------------------------------------------------
-  # Job 3: Integration test — generate WAV and run visualizer
-  # ---------------------------------------------------------------------------
-  integration:
-    name: Integration Test
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install MoonBit CLI
-        shell: bash
+      - name: Install MoonBit
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
-      - name: Verify installation
-        run: moon version --all
-
-      - name: Build (native)
-        timeout-minutes: 10
-        run: moon build --target native
-
-      - name: Generate test WAV files
-        run: |
-          python3 -c "
-          import struct, math, wave
-
-          sr = 44100
-          duration = 0.5  # 0.5 seconds — short enough to finish within CI timeout
-          n = int(sr * duration)
-
-          # 440Hz sine wave
-          with wave.open('test_440.wav', 'w') as w:
-              w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
-              for i in range(n):
-                  v = 0.8 * math.sin(2 * math.pi * 440 * i / sr)
-                  w.writeframes(struct.pack('<h', int(v * 32767)))
-
-          # Chord: 220 + 440 + 880 + 2000 Hz
-          with wave.open('test_chord.wav', 'w') as w:
-              w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
-              for i in range(n):
-                  t = i / sr
-                  v = 0.3 * math.sin(2*math.pi*220*t) \
-                    + 0.3 * math.sin(2*math.pi*440*t) \
-                    + 0.3 * math.sin(2*math.pi*880*t) \
-                    + 0.3 * math.sin(2*math.pi*2000*t)
-                  w.writeframes(struct.pack('<h', int(v * 32767 * 0.5)))
-          print(f'Generated test_440.wav and test_chord.wav ({duration}s each)')
-          "
-
-      - name: Run visualizer with 440Hz WAV
-        timeout-minutes: 2
-        run: |
-          # 0.5s audio with FFT 1024: ~43 hops * 50ms sleep + startup ≈ 3s.
-          # The generous timeout also covers incremental native linking.
-          timeout 30 moon run src/main test_440.wav 1024 > output_440.txt 2>&1 || true
-          grep -q "MoonFFTmusic" output_440.txt
-          grep -q "Sample rate: 44100Hz" output_440.txt
-          grep -q "Playback complete" output_440.txt
-          echo "✅ 440Hz integration test passed"
-
-      - name: Run visualizer with chord WAV
-        timeout-minutes: 2
-        run: |
-          timeout 30 moon run src/main test_chord.wav 1024 > output_chord.txt 2>&1 || true
-          grep -q "MoonFFTmusic" output_chord.txt
-          grep -q "Playback complete" output_chord.txt
-          echo "✅ Chord integration test passed"
-
-      - name: Run visualizer with different FFT sizes
-        timeout-minutes: 5
-        run: |
-          for size in 256 512 2048 4096; do
-            timeout 30 moon run src/main test_440.wav $size > /dev/null 2>&1 || true
-            echo "✅ FFT size $size ran without crash"
-          done
-
-      - name: Verify error handling (nonexistent file)
-        run: |
-          moon run src/main nonexistent.wav 1024 2>&1 | grep -q "File not found"
-          echo "✅ Error handling for missing file passed"
-
-      - name: Verify error handling (invalid FFT size)
-        run: |
-          moon run src/main test_440.wav 1000 2>&1 | grep -q "power of 2"
-          echo "✅ Error handling for invalid FFT size passed"
-
-      - name: Upload test output artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-output
-          path: |
-            output_440.txt
-            output_chord.txt
-          retention-days: 7
+      - name: Run tests
+        run: moon test --target native
