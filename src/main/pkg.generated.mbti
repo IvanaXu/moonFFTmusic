@@ -1,10 +1,6 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "IvanAXu/moonFFTmusic/src/main"
 
-import {
-  "moonbitlang/core/debug",
-}
-
 // Values
 
 // Errors
@@ -16,15 +12,15 @@ type BeatDetector
 
 type ChunkType
 
-type Complex derive(@debug.Debug)
+type Complex
 
-type ComputeDevice derive(@debug.Debug)
+type ComputeDevice
 
 type DisplayContext
 
-type GpuInfo derive(@debug.Debug)
+type GpuInfo
 
-type WavData derive(@debug.Debug)
+type WavData
 
 // Type aliases
 
