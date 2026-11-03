@@ -106,6 +106,12 @@ let note_names : Array[String] = [
 let num_brightness_levels : Int32 = 32
 
 ///|
+/// Cells per BASS/MID/TREB meter. Chosen so that
+/// `6 (dB gutter) + 3 × (5 label + 14 cells + 1 space) = 66` display columns,
+/// matching the spectrum body width exactly.
+let band_meter_cells : Int32 = 14
+
+///|
 /// Precomputed display context — computed once at startup, reused every frame.
 struct DisplayContext {
   num_bars : Int32
@@ -515,9 +521,12 @@ fn piano_key_is_black(semitone : Int32) -> Bool {
 }
 
 ///|
-/// Render piano keyboard — 2 octaves (24 semitones) from C3 (MIDI 48)
+/// Render piano keyboard — 2 octaves (24 semitones) from C3 (MIDI 48).
+/// The strip is horizontally centred in the `width`-column body so it no
+/// longer hugs the left edge and leaves a large empty gap on the right.
 fn render_piano_keyboard(
   sb : StringBuilder,
+  width : Int32,
   dom_midi : Int32,
   beat_pulse : Double,
   beat_count : Int32,
@@ -525,7 +534,18 @@ fn render_piano_keyboard(
   // 2 octaves starting from MIDI 48 (C3)
   let start_midi = 48
   let num_keys = 24
-  sb.write_string("\u001b[90m   \u001b[35m\u{1F3B9}\u001b[0m ")
+  // emoji(2) + space + keys + " C3-C5"(6) + " ♡"(2) + optional rhythm(6)
+  let mut content_width = 2 + 1 + num_keys + 6 + 2
+  if beat_count > 0 {
+    content_width = content_width + 6
+  }
+  let pad_left = ((width - content_width) / 2).clamp(min=0, max=width)
+  let pad_right = (width - content_width - pad_left).clamp(min=0, max=width)
+  sb.write_string("\u001b[90m      \u001b[0m")
+  for _ in 0..<pad_left {
+    sb.write_string(" ")
+  }
+  sb.write_string("\u001b[35m\u{1F3B9}\u001b[0m ")
   for i in 0..<num_keys {
     let midi = start_midi + i
     let is_black = piano_key_is_black(i)
@@ -565,6 +585,9 @@ fn render_piano_keyboard(
       }
     }
   }
+  for _ in 0..<pad_right {
+    sb.write_string(" ")
+  }
   sb.write_string("\n")
 }
 
@@ -581,12 +604,15 @@ fn render_band_meters(
   fft_size : Int32,
   band_colors : Array[String],
 ) -> Unit {
-  // Per-band peak magnitude over its frequency range
+  // Per-band peak magnitude over its frequency range.
+  // Labels are padded to a fixed 5 columns so BASS/MID/TREB meters line up.
   let bands = [
-    ("BASS", band_starts.unsafe_get(0), band_ends.unsafe_get(0)),
-    ("MID ", band_starts.unsafe_get(1), band_ends.unsafe_get(1)),
-    ("TREB", band_starts.unsafe_get(2), band_ends.unsafe_get(2)),
+    ("BASS ", band_starts.unsafe_get(0), band_ends.unsafe_get(0)),
+    ("MID  ", band_starts.unsafe_get(1), band_ends.unsafe_get(1)),
+    ("TREB ", band_starts.unsafe_get(2), band_ends.unsafe_get(2)),
   ]
+  // Left gutter matches the 6-column dB scale, so all status rows start at
+  // the same column as the spectrum body.
   sb.write_string("\u001b[90m      \u001b[0m")
   for band in bands {
     let (label, start, end) = band
@@ -597,11 +623,20 @@ fn render_band_meters(
         max_val = m
       }
     }
-    sb.write_string("\u001b[90m\{label} \u001b[0m")
+    sb.write_string("\u001b[90m\{label}\u001b[0m")
     let level = band_level_db(max_val, fft_size)
-    for i in 0..<10 {
-      if i < level {
-        let color_idx = (i.to_double() / 9.0 * 9.0).to_int().clamp(min=0, max=9)
+    // band_level_db is a 0..10 scale; stretch it across 14 cells.
+    let filled = (level * band_meter_cells / 10).clamp(
+      min=0,
+      max=band_meter_cells,
+    )
+    for i in 0..<band_meter_cells {
+      if i < filled {
+        let color_idx = (i.to_double() /
+          (band_meter_cells - 1).to_double() *
+          (band_meter_cells - 1).to_double())
+          .to_int()
+          .clamp(min=0, max=band_meter_cells - 1)
         sb.write_string(band_colors.unsafe_get(color_idx))
         sb.write_string("\u{2588}")
       } else {
@@ -704,8 +739,8 @@ fn create_display_context(
   })
   let max_levels = max_height * sub_res
   let height_factor = 14.0 / max_levels.to_double()
-  // Precompute RMS meter colors (green→yellow→red gradient, 20 levels)
-  let meter_width = 20
+  // Precompute RMS meter colors (green→yellow→red gradient, 44 levels)
+  let meter_width = 44
   let meter_colors = Array::make(meter_width, "")
   for i in 0..<meter_width {
     let pct = i.to_double() / meter_width.to_double()
@@ -795,10 +830,10 @@ fn create_display_context(
   let spectro_bg_tables = precompute_spectro_bg_tables(
     bar_hues, bar_sats, bar_lights, num_bars, 40, 3.0,
   )
-  // Precompute band meter colors (green→yellow→red, 10 levels)
-  let band_cols = Array::make(10, "")
-  for i in 0..<10 {
-    let pct = i.to_double() / 9.0
+  // Precompute band meter colors (green→yellow→red, 14 levels)
+  let band_cols = Array::make(band_meter_cells, "")
+  for i in 0..<band_meter_cells {
+    let pct = i.to_double() / (band_meter_cells - 1).to_double()
     let hue = 120.0 * (1.0 - pct)
     let (r, g, b) = hsl_to_rgb(hue, 0.85, 0.55)
     band_cols[i] = "\u001b[38;2;\{r};\{g};\{b}m"
@@ -1113,8 +1148,8 @@ fn render_spectrum(
   }
 
   // --- Header ---
-  // Inner width matches the spectrum area: 6-col left gutter + num_bars columns
-  let header_width = num_bars + 6
+  // Outer frame width == spectrum body width (6+l bars + 2 borders = 66)
+  let header_width = num_bars + 4
   let text_width = header_width - 2
   let title = truncate_to_width(
     "🎵 MoonFFTmusic — Real-time Spectrum Analyzer", text_width,
@@ -1208,7 +1243,7 @@ fn render_spectrum(
   } else {
     -1
   }
-  render_piano_keyboard(sb, dom_midi, beat_pulse, beat_count)
+  render_piano_keyboard(sb, num_bars, dom_midi, beat_pulse, beat_count)
 
   // --- Render bars with precomputed color table (continuous, no gaps) ---
   // Precompute heights[bar] * height_factor once — avoids to_double + multiply
@@ -1341,6 +1376,12 @@ fn render_spectrum(
       label_pos = label_pos + label.length()
     }
   }
+  // Pad the axis row to the full spectrum width so it ends flush with the
+  // body instead of stopping a few columns short.
+  while label_pos < num_bars {
+    sb.write_string(" ")
+    label_pos = label_pos + 1
+  }
   sb.write_string("\n")
 
   // --- Waveform strip ---
@@ -1367,9 +1408,9 @@ fn render_spectrum(
   } else {
     0.0
   }
-  let meter_filled = (rms_pct * 20.0).to_int()
+  let meter_width = ctx.meter_colors.length()
+  let meter_filled = (rms_pct * meter_width.to_double()).to_int()
 
-  let meter_width = 20
   // RMS meter with beat-reactive glow
   let rms_glow = if beat_pulse > 0.5 { "\u001b[1;33m" } else { "\u001b[1;37m" }
   sb.write_string("      ")
@@ -1386,36 +1427,58 @@ fn render_spectrum(
   sb.write_string("\u001b[0m] ")
   let db_int = rms_db.to_int()
   let db_frac = ((rms_db - db_int.to_double()) * 10.0).abs().to_int()
-  sb.write_string("\{db_int}.\{db_frac} dB\n")
+  let db_text = "\{db_int}.\{db_frac} dB"
+  sb.write_string(db_text)
+  // Pad the readout to a fixed 8 columns so the RMS row stays exactly as wide
+  // as the spectrum body for both "-8.8 dB" and "-26.5 dB".
+  let db_pad = (8 - display_width(db_text)).clamp(min=0, max=8)
+  for _ in 0..<db_pad {
+    sb.write_string(" ")
+  }
+  sb.write_string("\n")
 
-  // --- Progress bar ---
+  // --- Progress bar (kept inside the 66-column body) ---
   let progress_pct = if total_samples > 0 {
     current_pos.to_double() / total_samples.to_double()
   } else {
     0.0
   }
-  let progress_filled = (progress_pct * num_bars.to_double()).to_int()
+  let pct_int = (progress_pct * 100.0).to_int()
+  let pct_text = "\{pct_int}%"
+  let time_text = "\{format_time(current_pos, sample_rate)} / \{total_time_str}"
+  // Reserve room for the percentage + time readout so the whole row never
+  // exceeds the spectrum width (it used to overflow by ~13 columns).
+  let info_width = display_width(pct_text) + 1 + display_width(time_text)
+  let progress_width = (num_bars - info_width - 1).clamp(min=10, max=num_bars)
+  let progress_filled = (progress_pct * progress_width.to_double()).to_int()
 
   // Progress bar with beat-reactive pulse (bold on beat hits)
   let prog_glow = if beat_pulse > 0.3 { "\u001b[1m" } else { "" }
-  for i in 0..<num_bars {
+  sb.write_string("      ")
+  for i in 0..<progress_width {
+    // Sample the 60-step cyan→violet ramp across the shorter bar so the
+    // gradient still spans its full range.
+    let color_idx = (i.to_double() /
+      progress_width.to_double() *
+      (num_bars - 1).to_double())
+      .to_int()
+      .clamp(min=0, max=num_bars - 1)
     if i < progress_filled {
       sb.write_string(prog_glow)
-      sb.write_string(ctx.progress_colors.unsafe_get(i))
+      sb.write_string(ctx.progress_colors.unsafe_get(color_idx))
       sb.write_string("║")
     } else if i == progress_filled {
       sb.write_string(prog_glow)
-      sb.write_string(ctx.progress_colors.unsafe_get(i))
+      sb.write_string(ctx.progress_colors.unsafe_get(color_idx))
       sb.write_string("▓")
     } else {
       sb.write_string("\u001b[90m░")
     }
   }
   sb.write_string("\u001b[0m ")
-  let pct_int = (progress_pct * 100.0).to_int()
-  sb.write_string(
-    "\{pct_int}%  \{format_time(current_pos, sample_rate)} / \{total_time_str}",
-  )
+  sb.write_string(pct_text)
+  sb.write_string(" ")
+  sb.write_string(time_text)
 
   sb.to_string()
 }
