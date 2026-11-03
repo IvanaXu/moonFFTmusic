@@ -1286,9 +1286,7 @@ fn render_spectrum(
   // the header corner down to the baseline (6-column gutter is preserved).
   sb.write_string("\u001b[38;2;70;70;90m│     \u001b[0m")
   for bar in 0..<num_bars {
-    if bar == dom_bar && heights[bar] > 0 {
-      sb.write_string("\u001b[1;33m▼\u001b[0m")
-    } else if heights[bar] > 0 {
+    if heights[bar] > 0 {
       // Bar top connector — use blended height for temporal stability
       // Blending pass-1 (prev_heights) and pass-2 (heights) smooths
       // the connector input, reducing ╱↔─↔╲ oscillation.
@@ -1309,8 +1307,20 @@ fn render_spectrum(
       let level = (heights[bar].to_double() * height_factor + 16.0)
         .to_int()
         .clamp(min=10, max=nbl_minus_1)
-      sb.write_string(color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level))
-      sb.write_string(connector_char(left_h, blend_h, right_h))
+      let glyph = connector_char(left_h, blend_h, right_h)
+      if bar == dom_bar {
+        // Dominant bar: highlight the contour glyph itself instead of
+        // replacing it with ▼ — the envelope shape stays intact (a highlight
+        // must not replace structural characters, same rule as the keyboard).
+        sb.write_string("\u001b[1;33m")
+        sb.write_string(glyph)
+        sb.write_string("\u001b[0m")
+      } else {
+        sb.write_string(
+          color_tbl.unsafe_get(bar_offsets.unsafe_get(bar) + level),
+        )
+        sb.write_string(glyph)
+      }
     } else if ctx.is_grid[bar] {
       sb.write_string("\u001b[38;2;58;72;104m")
       sb.write_string("╎\u001b[0m")

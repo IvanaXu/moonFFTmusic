@@ -45,7 +45,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | 10 | Bottom glow reflection | 3-row dim mirror of spectrum with fading intensity |
 | 11 | Dashed reference line | `┄` pattern at -12dB, `·` at gap positions |
 | 12 | Bar tops | Top cell is a fractional block flush on the body (no half-cell gap) |
-| 13 | Peak frequency marker | Yellow `▼` arrow above dominant frequency bar |
+| 13 | Peak frequency marker | Dominant bar's contour glyph glows yellow on the envelope row |
 | 14 | Vertical frequency grid | Faint `╎` at label positions (50Hz – 10kHz) |
 | 15 | Magnitude-based color | Brightness = 50% row position + 50% magnitude ratio |
 | 16 | **True-color 24-bit RGB gradient** | Smooth HSL-based rainbow (blue→cyan→green→yellow→red) with a white-glow core, using `\u001b[38;2;R;G;Bm`, precomputed per-bar |
@@ -80,7 +80,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | `bar_fade` array | `Array::make` per frame | Reusable field in `PeakTrail` | Eliminates 1 array allocation/frame |
 | Height double conversion | `to_double()` × `height_factor` per bar per row | Precomputed `heights_d[]` before row loop | Eliminates 2400 `to_double`+multiply/frame |
 | IIR anti-flicker state | `Array[Int32]` (integer IIR can't eliminate ±1 oscillation) | `Array[Double]` (float IIR before quantization) | Eliminates residual ±1 flicker |
-| Dominant bar marker | Raw `dominant_bar` recomputed per frame | Sticky `dom_bar` passed from `main.mbt` | Eliminates ▼ marker jumping |
+| Dominant bar marker | Raw `dominant_bar` recomputed per frame | Sticky `dom_bar` passed from `main.mbt` | Eliminates dominant-marker jumping |
 | Rainbow hue rotation | `rotate_hue()` 1920 string allocs/frame | Precomputed 40 color tables, swap index | Zero per-frame string allocs |
 | `heights_d`/`peak_heights_d` | `Array::make` per frame | Pre-allocated in `DisplayContext` | Eliminates 120 Double allocs/frame |
 | Terminal height | Fixed `max_height=26` (45 lines/frame) | Auto-detect `LINES` env var | Eliminates scroll flicker on small terminals |
@@ -182,7 +182,7 @@ Smaller sizes give better time resolution but coarser frequency bins.
 ║ 🎵 MoonFFTmusic — Real-time Spectrum Analyzer                  ║
 ║ 44100Hz | FFT 1024 | Peak 43Hz (F1-) ♫ | 120 BPM | 0:1.0       ║
 ╚━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╝
-│     ╱────╱╱───▼──────────╲╲∨╱╱──╲╲╲────────────────╱──∨──╲──────
+│     ╱────╱╱──────────────╲╲∨╱╱──╲╲╲────────────────╱──∨──╲──────
 │              🎹 ▮▏│▏││▏│▏│▏││▏│▏││▏│▏│▏│ C3-C5 ♥  ○○●○          
 │0dB   ╎     ████████████▆▃  ╎      ╎     ╎        ╎      ╎       
 │      ╎     ██████████████  ╎      ╎     ╎        ╎      ╎       
@@ -250,7 +250,7 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 | 📊 Progress pulse | Cyan→violet progress bar (distinct from spectrum) pulses on beats |
 | 🎚️ RMS beat glow | RMS label turns yellow on strong beats |
 | 🌊 Spectrogram waterfall | 3-row scrolling history; per-frequency hue (matches bars) with intensity brightness |
-| 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted ▼ |
+| 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted `▮` |
 | 🎵 BPM estimation | Beat timing analysis with ♥/♡ indicator and BPM display in header |
 | 🥁 Rhythm indicator | 4-step beat marker advancing with each detected beat |
 | 🔊 Frequency band meters | BASS/MID/TREBLE 10-cell horizontal energy meters |
