@@ -1180,12 +1180,22 @@ fn render_spectrum(
   let title = truncate_to_width(
     "🎵 MoonFFTmusic — Real-time Spectrum Analyzer", text_width,
   )
-  let beat_indicator = if beat_pulse > 0.5 { " ♫" } else { "  " }
+  let beat_indicator = if beat_pulse > 0.5 { " ♫" } else { "" }
   let bpm_str = if bpm > 0.0 { " | \{bpm.to_int()} BPM" } else { "" }
-  let info_line = truncate_to_width(
-    "\{sample_rate}Hz | FFT \{fft_size} | Peak \{format_freq(dominant_freq_int)} (\{note_name})\{beat_indicator}\{bpm_str} | \{format_time(current_pos, sample_rate)}",
-    text_width,
-  )
+  // Colour-code the info line so live values read above static labels:
+  // dim labels, cyan peak frequency, yellow note, green BPM, dim time.
+  let info_dim = "\u001b[38;2;120;132;158m"
+  let rate_str = "\{sample_rate}Hz | FFT \{fft_size}"
+  let freq_str = format_freq(dominant_freq_int)
+  let note_str = " (\{note_name})"
+  let info_plain = rate_str +
+    " | Peak " +
+    freq_str +
+    note_str +
+    beat_indicator +
+    bpm_str +
+    " | " +
+    format_time(current_pos, sample_rate)
 
   sb.write_string(beat_glow)
   sb.write_string("╔")
@@ -1202,13 +1212,48 @@ fn render_spectrum(
     sb.write_string(" ")
   }
   sb.write_string(" ║\n║ ")
-  sb.write_string(info_line)
-  let info_pad = (text_width - display_width(info_line)).clamp(
-    min=0,
-    max=header_width,
-  )
-  for _ in 0..<info_pad {
-    sb.write_string(" ")
+  // Fall back to a single dim run if the line would overflow the frame.
+  if display_width(info_plain) > text_width {
+    let truncated = truncate_to_width(info_plain, text_width)
+    sb.write_string(info_dim)
+    sb.write_string(truncated)
+    sb.write_string("\u001b[0m")
+    let pad = (text_width - display_width(truncated)).clamp(
+      min=0,
+      max=text_width,
+    )
+    for _ in 0..<pad {
+      sb.write_string(" ")
+    }
+  } else {
+    sb.write_string(info_dim)
+    sb.write_string(rate_str)
+    sb.write_string(" | Peak ")
+    sb.write_string("\u001b[1;38;2;110;220;240m")
+    sb.write_string(freq_str)
+    sb.write_string("\u001b[38;2;250;205;90m")
+    sb.write_string(note_str)
+    sb.write_string(info_dim)
+    if beat_pulse > 0.5 {
+      sb.write_string("\u001b[1;38;2;255;170;90m")
+      sb.write_string(" ♫")
+      sb.write_string(info_dim)
+    }
+    if bpm > 0.0 {
+      sb.write_string("\u001b[38;2;150;220;130m")
+      sb.write_string(bpm_str)
+      sb.write_string(info_dim)
+    }
+    sb.write_string(" | ")
+    sb.write_string(format_time(current_pos, sample_rate))
+    sb.write_string("\u001b[0m")
+    let pad = (text_width - display_width(info_plain)).clamp(
+      min=0,
+      max=text_width,
+    )
+    for _ in 0..<pad {
+      sb.write_string(" ")
+    }
   }
   sb.write_string(" ║\n╚")
   for _ in 0..<header_width {
