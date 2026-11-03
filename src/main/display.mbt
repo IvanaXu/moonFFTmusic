@@ -1117,6 +1117,7 @@ fn render_spectrum(
   }
 
   // --- Fused pass 2: spatial smoothing + peak hold update ---
+  let heights_d = ctx.heights_d
   let mut prev_val = 0.0
   for bar in 0..<num_bars {
     let left = prev_val
@@ -1136,7 +1137,47 @@ fn render_spectrum(
     let iir_val = render_prev.unsafe_get(bar) * 0.4 + blurred * 0.6
     render_prev.unsafe_set(bar, iir_val)
     heights[bar] = (iir_val + 0.5).to_int()
-    // Peak hold update (inline — saves one loop over num_bars)
+  }
+
+  // --- Pass 2b: Monstercat neighbor fill (borrowed from cava) ---
+  // A tall bar props up its neighbors: h[j] = max(h[j], h[i] / k^|i-j|).
+  // Unlike averaging, this only raises valleys — real peaks survive, and the
+  // spectrum reads as continuous ridges instead of sawtooth spikes.
+  let mc_falloff = 1.5
+  for bar in 0..<num_bars {
+    heights_d.unsafe_set(bar, heights[bar].to_double())
+  }
+  for i in 0..<num_bars {
+    let v = heights_d.unsafe_get(i)
+    if v < 1.0 {
+      continue
+    }
+    let mut d = 1
+    let mut fall = 1.0
+    while d < num_bars {
+      fall = fall / mc_falloff
+      let fill = v * fall
+      if fill < 0.5 {
+        break
+      }
+      let l = i - d
+      if l >= 0 && heights_d.unsafe_get(l) < fill {
+        heights_d.unsafe_set(l, fill)
+      }
+      let r = i + d
+      if r < num_bars && heights_d.unsafe_get(r) < fill {
+        heights_d.unsafe_set(r, fill)
+      }
+      d = d + 1
+    }
+  }
+  for bar in 0..<num_bars {
+    heights[bar] = (heights_d.unsafe_get(bar) + 0.5).to_int()
+  }
+
+  // --- Pass 2c: peak hold update (after neighbor fill, so caps follow the
+  // envelope instead of lagging one frame behind the propped-up valleys) ---
+  for bar in 0..<num_bars {
     match (heights[bar] >= peak_heights[bar], peak_frames[bar] > 3) {
       (true, _) => {
         peak_heights[bar] = heights[bar]
@@ -1368,7 +1409,6 @@ fn render_spectrum(
   // --- Render bars with precomputed color table (continuous, no gaps) ---
   // Precompute heights[bar] * height_factor once — avoids to_double + multiply
   // per bar per row (saves 2 ops × 60 bars × 20 rows = 2400 ops/frame)
-  let heights_d = ctx.heights_d
   let peak_heights_d = ctx.peak_heights_d
   for bar in 0..<num_bars {
     heights_d.unsafe_set(bar, heights[bar].to_double() * height_factor)
