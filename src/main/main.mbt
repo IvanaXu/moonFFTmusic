@@ -99,26 +99,38 @@ async fn main {
   // Fixed overhead per frame: 4(header) + 1(connector) + 1(piano) + 1(baseline)
   //   + 3(waterfall) + 1(labels) + 1(waveform) + 1(bands) + 1(RMS)
   //   + 1(progress) = 15
-  // max_height = terminal_lines - 15, clamped to [8, 40]
-  let max_height = match @env.get_env_var("LINES") {
+  // max_height = terminal_lines - 15, clamped to [4, 40]
+  // Terminals shorter than 24 lines cannot fit every row: the piano keyboard
+  // and the band meters are dropped there (cava does the same — shrink the
+  // chrome before letting the frame scroll), bringing the overhead down to 13.
+  let lines = match @env.get_env_var("LINES") {
     Some(s) => {
       // Parse LINES env var to int
-      let mut lines = 0
+      let mut n = 0
       let mut valid = false
       for c in s {
         if c >= '0' && c <= '9' {
-          lines = lines * 10 + (c.to_int() - '0'.to_int())
+          n = n * 10 + (c.to_int() - '0'.to_int())
           valid = true
         }
       }
       if valid {
-        (lines - 15).clamp(min=8, max=40)
+        n
       } else {
-        12
+        26
       }
     }
-    None => 11 // default: fits 26-line terminal
+    None => 26 // no LINES reported — assume a 26-line terminal
   }
+  let show_piano = lines >= 24
+  let show_bands = lines >= 24
+  // Base overhead (13) = 4(header) + 1(connector) + 1(baseline) + 3(waterfall)
+  //   + 1(labels) + 1(waveform) + 1(RMS) + 1(progress)
+  // The piano and band-meter rows exist only on tall terminals.
+  let overhead = 13 +
+    (if show_piano { 1 } else { 0 }) +
+    (if show_bands { 1 } else { 0 })
+  let max_height = (lines - overhead).clamp(min=4, max=40)
   let sub_res = 8
   // Frame pacing: ~real-time playback at ~20 fps.
   // Each frame advances the analysis window by one target interval (50 ms) of
@@ -150,6 +162,8 @@ async fn main {
     fft_size / 2,
     wav.sample_rate,
     fft_size,
+    show_piano,
+    show_bands,
   )
 
   // --- Initialize beat detector ---

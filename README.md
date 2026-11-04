@@ -235,8 +235,10 @@ The `WV` line is a Braille-dot oscilloscope (like cli-visualizer's wave mode):
 120 samples trace a continuous curve through 2×4 dot cells, auto-gained per
 window so quiet passages keep their shape. `BASS / MID / TREB` meters and the
 `RMS` bar all use the same absolute -60..0 dB scale as the spectrum.
-Terminal height is **auto-detected** via `LINES` env var — the display adapts
-to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
+Terminal height is **auto-detected** via `LINES` env var — the frame always
+fits exactly, without scroll flicker. Terminals shorter than 24 lines
+automatically drop the piano keyboard and band-meter rows (cava-style: shrink
+the chrome, keep the spectrum). Press `Ctrl+C` to stop.
 
 ### Visual Effects (14 dynamic effects)
 

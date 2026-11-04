@@ -137,6 +137,10 @@ struct DisplayContext {
   db_scale_labels : Array[String]
   // Precomputed spectrum baseline (L-shaped axis corner + filler dashes, 66 cols)
   spectrum_baseline : String
+  // Small-terminal layout: piano keyboard and band meters are dropped when the
+  // terminal is too short to fit the full frame (see main.mbt overhead calc).
+  show_piano : Bool
+  show_bands : Bool
   // Waveform amplitude colors (256 levels, dim gray-blue → bright cyan)
   wave_amp_colors : Array[String]
   bar_offsets : Array[Int32]
@@ -714,6 +718,8 @@ fn create_display_context(
   half_fft : Int32,
   sample_rate : Int32,
   fft_size : Int32,
+  show_piano : Bool,
+  show_bands : Bool,
 ) -> DisplayContext {
   let bin_map = Array::makei(num_bars, fn(bar) {
     log_freq_bin(bar, num_bars, half_fft)
@@ -884,6 +890,8 @@ fn create_display_context(
     label_colors,
     db_scale_labels,
     spectrum_baseline: baseline,
+    show_piano,
+    show_bands,
     wave_amp_colors,
     bar_offsets: pre_bar_offsets,
     heights_d: Array::make(num_bars, 0.0),
@@ -1422,15 +1430,18 @@ fn render_spectrum(
   sb.write_string("\n")
 
   // --- Piano keyboard row — shows detected note on 2-octave keyboard ---
-  let dom_midi = if dominant_freq > 0 {
-    (69.0 + 12.0 * @math.log2(dominant_freq / 440.0))
-    .round()
-    .to_int()
-    .clamp(min=48, max=71)
-  } else {
-    -1
+  // Dropped on short terminals (<24 lines): the bar field gets the space.
+  if ctx.show_piano {
+    let dom_midi = if dominant_freq > 0 {
+      (69.0 + 12.0 * @math.log2(dominant_freq / 440.0))
+      .round()
+      .to_int()
+      .clamp(min=48, max=71)
+    } else {
+      -1
+    }
+    render_piano_keyboard(sb, num_bars, dom_midi, beat_pulse, beat_count)
   }
-  render_piano_keyboard(sb, num_bars, dom_midi, beat_pulse, beat_count)
 
   // --- Render bars with precomputed color table (continuous, no gaps) ---
   // Precompute heights[bar] * height_factor once — avoids to_double + multiply
@@ -1585,15 +1596,18 @@ fn render_spectrum(
   render_waveform(sb, waveform, num_bars, beat_pulse, ctx.wave_amp_colors)
 
   // --- Energy history sparkline (MoonBit `mut` circular buffer) ---
-  render_band_meters(
-    sb,
-    magnitudes,
-    ctx.band_starts,
-    ctx.band_ends,
-    ctx.fft_size,
-    ctx.band_colors,
-    ctx.band_levels,
-  )
+  // Dropped on short terminals (<24 lines) together with the piano row.
+  if ctx.show_bands {
+    render_band_meters(
+      sb,
+      magnitudes,
+      ctx.band_starts,
+      ctx.band_ends,
+      ctx.fft_size,
+      ctx.band_colors,
+      ctx.band_levels,
+    )
+  }
 
   // --- RMS meter ---
   let raw_db = if rms_value > 0.0 {
