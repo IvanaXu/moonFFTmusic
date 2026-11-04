@@ -137,7 +137,8 @@ struct DisplayContext {
   db_scale_labels : Array[String]
   // Precomputed spectrum baseline (L-shaped axis corner + filler dashes, 66 cols)
   spectrum_baseline : String
-  waveform_colors : Array[String]
+  // Waveform amplitude colors (256 levels, dim gray-blue → bright cyan)
+  wave_amp_colors : Array[String]
   bar_offsets : Array[Int32]
   // Spectrogram waterfall: 3 rows of history
   spectrogram_history : Array[Array[Int32]]
@@ -825,33 +826,14 @@ fn create_display_context(
       db_scale_labels[row] = "\u001b[38;2;70;70;90m│    \u001b[0m "
     }
   }
-  // Precompute waveform color table — 9 scaled values × 256 amplitude levels
-  // Index: (scaled + 4) * 256 + amp_int. Eliminates per-frame string interpolation.
-  // Beat cases (scaled 3|4, -3|-4) store non-beat colors; beat override is rare.
-  let wf_tbl = Array::make(9 * 256, "")
+  // Precompute waveform amplitude colors — 256 levels, dim gray-blue → bright
+  // cyan (no glyphs baked in: the Braille renderer supplies its own dot chars).
+  let wave_amp_colors = Array::make(256, "")
   for amp in 0..<256 {
-    // scaled 0: fixed dim color
-    wf_tbl[4 * 256 + amp] = "\u001b[38;2;88;98;124m─\u001b[0m"
-    // scaled 1: g = 180 + amp/4
-    let g1 = 180 + amp / 4
-    wf_tbl[5 * 256 + amp] = "\u001b[38;2;80;\{g1};200m▔\u001b[0m"
-    // scaled 2: g = 200 + amp/5
-    let g2 = 200 + amp / 5
-    wf_tbl[6 * 256 + amp] = "\u001b[38;2;60;\{g2};180m▀\u001b[0m"
-    // scaled 3|4 non-beat: g = 220 + amp/6
-    let g3 = 220 + amp / 6
-    wf_tbl[7 * 256 + amp] = "\u001b[38;2;100;\{g3};120m█\u001b[0m"
-    wf_tbl[8 * 256 + amp] = wf_tbl[7 * 256 + amp]
-    // scaled -1: b = 180 + amp/4
-    let b1 = 180 + amp / 4
-    wf_tbl[3 * 256 + amp] = "\u001b[38;2;80;150;\{b1}m▁\u001b[0m"
-    // scaled -2: b = 200 + amp/5
-    let b2 = 200 + amp / 5
-    wf_tbl[2 * 256 + amp] = "\u001b[38;2;100;120;\{b2}m▄\u001b[0m"
-    // scaled -3|-4 non-beat: b = 220 + amp/6
-    let b3 = 220 + amp / 6
-    wf_tbl[1 * 256 + amp] = "\u001b[38;2;120;150;\{b3}m█\u001b[0m"
-    wf_tbl[0 * 256 + amp] = wf_tbl[1 * 256 + amp]
+    let r = 88 + amp * 52 / 255
+    let g = 98 + amp * 137 / 255
+    let b = 124 + amp * 131 / 255
+    wave_amp_colors[amp] = "\u001b[38;2;\{r};\{g};\{b}m"
   }
   // Precompute bar offsets — eliminates per-frame Array::makei allocation
   let pre_bar_offsets = Array::makei(num_bars, fn(bar) {
@@ -902,7 +884,7 @@ fn create_display_context(
     label_colors,
     db_scale_labels,
     spectrum_baseline: baseline,
-    waveform_colors: wf_tbl,
+    wave_amp_colors,
     bar_offsets: pre_bar_offsets,
     heights_d: Array::make(num_bars, 0.0),
     peak_heights_d: Array::make(num_bars, 0.0),
@@ -991,15 +973,29 @@ fn is_ref_line(row : Int32, max_height : Int32) -> Bool {
 }
 
 ///|
-/// Render waveform strip with true-color amplitude-based coloring.
-/// The window is auto-scaled to its own peak so quiet passages still reveal the
-/// waveform shape; absolute loudness is already carried by the RMS meter.
+/// Braille dot bits for one 2×4 cell: rows top→bottom, sub-columns left→right
+/// (U+2800 base pattern used by terminal oscilloscopes).
+let braille_dot_bits : Array[Array[Int32]] = [
+  [1, 8],
+  [2, 16],
+  [4, 32],
+  [64, 128],
+]
+
+///|
+/// Render the waveform strip as a Braille-dot oscilloscope (the wave mode of
+/// cli-visualizer). Each of the 60 cells is a 2×4 dot grid holding 2 samples,
+/// so the curve spans 120 horizontal points and reads as a continuous line
+/// instead of discrete block glyphs. Vertical min–max fill between consecutive
+/// samples keeps steep slopes connected inside a cell (classic scope tracing).
+/// The window stays auto-gained to its own peak; absolute loudness is carried
+/// by the RMS meter.
 fn render_waveform(
   sb : StringBuilder,
   waveform : Array[Double],
   width : Int32,
   pulse : Double,
-  wf_colors : Array[String],
+  amp_colors : Array[String],
 ) -> Unit {
   sb.write_string("\u001b[90m   WV \u001b[0m")
   let n = waveform.length()
@@ -1007,9 +1003,8 @@ fn render_waveform(
     sb.write_string("\n")
     return
   }
-  // Without auto-scaling, `sample * 4` truncated to 0 for |sample| < 0.25,
-  // collapsing most frames into a flat "─" line. Normalize to the window peak
-  // so the strip always shows its shape; a small gate keeps silence flat.
+  // Without auto-scaling the curve would collapse into the axis for quiet
+  // windows; a small gate keeps true silence flat.
   let mut peak_abs = 0.0
   for j in 0..<n {
     let a = waveform.unsafe_get(j).abs()
@@ -1018,27 +1013,52 @@ fn render_waveform(
     }
   }
   let gain = if peak_abs > 0.005 { 1.0 / peak_abs } else { 0.0 }
-  let step = n.to_double() / width.to_double()
   let has_beat = pulse > 0.3
-  for i in 0..<width {
-    let sample_idx = (i.to_double() * step).to_int().clamp(min=0, max=n - 1)
-    let sample = waveform[sample_idx] * gain
-    let scaled = (sample * 4.0).round().to_int().clamp(min=-4, max=4)
-    let abs_amp = sample.abs().clamp(min=0.0, max=1.0)
+  let half = n / width
+  let mut prev_row = 2
+  for c in 0..<width {
+    let mut bits = 0
+    let mut amp_max = 0.0
+    let mut y_sum = 0.0
+    for s in 0..<half {
+      let gi = c * half + s
+      let y = waveform.unsafe_get(gi) * gain * 3.4
+      let a = y.abs()
+      if a > amp_max {
+        amp_max = a
+      }
+      y_sum = y_sum + y
+      let row = ((3.4 - y) / 6.8 * 4.0).to_int().clamp(min=0, max=3)
+      // Vertical fill between this sample and the previous one keeps steep
+      // slopes connected on this sub-column (scope tracing behaviour).
+      let lo = if row < prev_row { row } else { prev_row }
+      let hi = if row > prev_row { row } else { prev_row }
+      let mut r = lo
+      while r <= hi {
+        bits = bits | braille_dot_bits[r][s]
+        r = r + 1
+      }
+      prev_row = row
+    }
+    if bits == 0 {
+      sb.write_string(" ")
+      continue
+    }
+    let abs_amp = amp_max.clamp(min=0.0, max=1.0)
     let amp_int = (abs_amp * 255.0).to_int().clamp(min=0, max=255)
-    // Precomputed table: index = (scaled + 4) * 256 + amp_int
-    let tbl_idx = (scaled + 4) * 256 + amp_int
-    // Beat override for high-amplitude bars (rare path)
-    if has_beat && (scaled >= 3 || scaled <= -3) {
-      if scaled >= 3 {
+    // Beat flash on loud cells: red above the axis, blue below (by cell sign).
+    if has_beat && amp_max > 0.75 {
+      if y_sum >= 0.0 {
         let r = 200 + (pulse * 55.0).to_int()
-        sb.write_string("\u001b[38;2;\{r};255;100m█\u001b[0m")
+        sb.write_string("\u001b[38;2;\{r};255;100m")
       } else {
         let r = 100 + (pulse * 155.0).to_int()
-        sb.write_string("\u001b[38;2;\{r};150;255m█\u001b[0m")
+        sb.write_string("\u001b[38;2;\{r};150;255m")
       }
+      sb.write_string("\{Int::unsafe_to_char(0x2800 + bits)}\u001b[0m")
     } else {
-      sb.write_string(wf_colors.unsafe_get(tbl_idx))
+      sb.write_string(amp_colors.unsafe_get(amp_int))
+      sb.write_string("\{Int::unsafe_to_char(0x2800 + bits)}")
     }
   }
   sb.write_string("\n")
@@ -1558,7 +1578,7 @@ fn render_spectrum(
   sb.write_string("\n")
 
   // --- Waveform strip ---
-  render_waveform(sb, waveform, num_bars, beat_pulse, ctx.waveform_colors)
+  render_waveform(sb, waveform, num_bars, beat_pulse, ctx.wave_amp_colors)
 
   // --- Energy history sparkline (MoonBit `mut` circular buffer) ---
   render_band_meters(

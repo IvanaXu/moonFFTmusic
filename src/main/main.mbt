@@ -170,7 +170,7 @@ async fn main {
   let mag_sq = Array::make(half, 0.0) // mag² for all bins (no sqrt)
   let magnitudes = Array::make(num_bars, 0.0) // aggregated magnitudes per bar
   let heights = Array::make(num_bars, 0) // bar heights (reusable)
-  let waveform = Array::make(num_bars, 0.0) // waveform display data
+  let waveform = Array::make(120, 0.0) // waveform display data (2 samples per braille cell)
 
   // --- Print initial info ---
   println("Loading WAV file: \{wav_path}")
@@ -233,10 +233,13 @@ async fn main {
     let current_time = pos.to_double() / wav.sample_rate.to_double()
     let beat_intensity = beat_detector.update(rms, current_time)
 
-    // Step 8: Fill waveform array in-place (no allocation)
+    // Step 8: Fill waveform array in-place (no allocation).
+    // 120 samples = 2 per braille cell, spanning one FFT window.
     let wav_samples = wav.samples
-    for i in 0..<num_bars {
-      let idx = pos + i * fft_size / num_bars
+    let wave_pts = 120
+    for i in 0..<wave_pts {
+      let idx = (pos.to_double() +
+      i.to_double() * fft_size.to_double() / wave_pts.to_double()).to_int()
       waveform.unsafe_set(
         i,
         if idx < total {

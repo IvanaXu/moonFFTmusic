@@ -219,7 +219,7 @@ Smaller sizes give better time resolution but coarser frequency bins.
 │     ████████████████████████████████████▆▄▃▃▄▆█████████████████▆
 └─────────────────────────────────────────────────────────────────
        50Hz   100Hz 200Hz    500Hz  1kHz  2kHz     5kHz   10kHz   
-   WV ──▔▔▔▀▀▀▔▔▀▔▔▔▔▔──▔▔▔▔▀▀▔─▁▁▁▄▄▄▄██████▄▁─▔▔▔▀▔▔▔▔▔▔▔▔▔▔──▔▔
+   WV ⠴⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠲⠖⠒⠒⠒⠒⠒⠒⠒⠦⠤⠤⠤⢤⣀⡤⣄⣀⣀⣀⣀⣀⣀⣠⠤⠖⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠶⠒⠒⠒
       BASS ██████████░░░░ MID  ████████░░░░░░ TREB ███░░░░░░░░░░░ 
       RMS: [████████████████████████████████░░░░░░░░░░░░] -16.9 dB
       ║║║║║║║║║║║║║║║║║║║║║▓░░░░░░░░░░░░░░░░░░░░ 50% 0:1.0 / 0:2.0
@@ -231,9 +231,10 @@ The header border **flashes white-yellow** on strong beats (═ → ━).
 Below the main bars, a **3-row spectrogram waterfall** shows recent spectrum
 history: each column keeps the same hue as its live bar, and the newest row is
 the brightest so the three rows read as a time sequence.
-The `WV` line shows the time-domain waveform (auto-gained per window, so quiet
-passages keep their shape). `BASS / MID / TREB` meters and the `RMS` bar all use
-the same absolute -60..0 dB scale as the spectrum.
+The `WV` line is a Braille-dot oscilloscope (like cli-visualizer's wave mode):
+120 samples trace a continuous curve through 2×4 dot cells, auto-gained per
+window so quiet passages keep their shape. `BASS / MID / TREB` meters and the
+`RMS` bar all use the same absolute -60..0 dB scale as the spectrum.
 Terminal height is **auto-detected** via `LINES` env var — the display adapts
 to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 
