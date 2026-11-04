@@ -152,6 +152,9 @@ struct DisplayContext {
   // Spectrogram waterfall: 3 rows of history
   spectrogram_history : Array[Array[Int32]]
   mut spectrogram_idx : Int32
+  // Render-frame clock: scanline sweep position and data-frame parity gate
+  mut scan_pos : Int32
+  mut data_frame_parity : Int32
   // Precomputed spectrogram waterfall background tables (per-bar hue, rotating)
   spectrogram_bg_tables : Array[Array[String]]
   // Auto-gain control
@@ -680,9 +683,9 @@ fn render_band_meters(
     let raw = band_level_db(max_val, fft_size).to_double()
     let prev = band_levels.unsafe_get(idx)
     let smoothed = if raw >= prev {
-      prev * 0.55 + raw * 0.45
+      prev * 0.72 + raw * 0.28
     } else {
-      prev * 0.85 + raw * 0.15
+      prev * 0.92 + raw * 0.08
     }
     band_levels.unsafe_set(idx, smoothed)
     // 0..10 dB scale stretched across 14 cells, rounded.
@@ -961,6 +964,8 @@ fn create_display_context(
     peak_heights_d: Array::make(num_bars, 0.0),
     spectrogram_history: spectro_hist,
     spectrogram_idx: 0,
+    scan_pos: 0,
+    data_frame_parity: 0,
     spectrogram_bg_tables: spectro_bg_tables,
     auto_gain: 1.0,
     band_colors: band_cols,
@@ -1199,9 +1204,9 @@ fn render_spectrum(
     let prev = prev_heights[bar].to_double()
     let curr = raw_height.to_double()
     let smoothed = if curr >= prev {
-      prev * 0.5 + curr * 0.5
+      prev * 0.71 + curr * 0.29
     } else {
-      prev * 0.82 + curr * 0.18
+      prev * 0.90 + curr * 0.10
     }
     // Round instead of truncate — eliminates integer-boundary oscillation
     heights[bar] = (smoothed + 0.5).to_int()
@@ -1226,7 +1231,7 @@ fn render_spectrum(
     // Operating on doubles (not ints) is critical: an int IIR cannot
     // eliminate ±1 oscillation (e.g. 15↔16), but a double IIR smooths
     // the value to ~15.4 which quantizes stably to 15.
-    let iir_val = render_prev.unsafe_get(bar) * 0.4 + blurred * 0.6
+    let iir_val = render_prev.unsafe_get(bar) * 0.7 + blurred * 0.3
     render_prev.unsafe_set(bar, iir_val)
     heights[bar] = (iir_val + 0.5).to_int()
   }
@@ -1278,8 +1283,8 @@ fn render_spectrum(
       peak_heights[bar] = h
       peak_frames[bar] = 0
       peak_speeds[bar] = 0.0
-    } else if peak_frames[bar] > 3 {
-      let sp = (peak_speeds[bar] + 8.0).clamp(min=0.0, max=24.0)
+    } else if peak_frames[bar] > 7 {
+      let sp = (peak_speeds[bar] + 3.0).clamp(min=0.0, max=14.0)
       peak_speeds[bar] = sp
       let dropped = (peak_heights[bar].to_double() - sp).to_int()
       peak_heights[bar] = if dropped < h { h } else { dropped }
@@ -1290,13 +1295,16 @@ fn render_spectrum(
   }
 
   // --- Update spectrogram waterfall history ---
-  // Copy current heights into the next history slot
-  let spectro_idx = ctx.spectrogram_idx
-  let spectro_row = ctx.spectrogram_history.unsafe_get(spectro_idx)
-  for bar in 0..<num_bars {
-    spectro_row.unsafe_set(bar, heights[bar])
+  // Snapshot once per DATA frame (every 2nd render frame) so the three rows
+  // still span ~144 ms of history at the higher render rate.
+  if ctx.data_frame_parity == 0 {
+    let spectro_idx = ctx.spectrogram_idx
+    let spectro_row = ctx.spectrogram_history.unsafe_get(spectro_idx)
+    for bar in 0..<num_bars {
+      spectro_row.unsafe_set(bar, heights[bar])
+    }
+    ctx.spectrogram_idx = (spectro_idx + 1) % 3
   }
-  ctx.spectrogram_idx = (spectro_idx + 1) % 3
 
   // --- Dominant frequency + note ---
   let dominant_bin = ctx.bin_map[dom_bar]
@@ -1333,11 +1341,11 @@ fn render_spectrum(
   // Fast pulse gives a snappy brightness hit on each beat; the slow intensity
   // keeps a gentle sustained bloom. Together they read as punch + afterglow.
   let beat_boost = (beat_intensity * 4.0 + beat_pulse * 8.0).to_int()
-  // Scanline: a gentle highlight row that sweeps up and down.
-  // Advance one row per frame (pos rises by fft_size/2 each frame); the old
-  // `current_pos / sub_res` stepped 64 rows per frame, i.e. it looked random.
+  // Scanline: a gentle highlight row that sweeps up and down. Independent of
+  // the data-frame cadence so it glides smoothly at render rate (~125 rows/s).
   let scan_cycle = max_height * 2
-  let scan_raw = current_pos / (fft_size / 2) % scan_cycle
+  ctx.scan_pos = (ctx.scan_pos + 3) % scan_cycle
+  let scan_raw = ctx.scan_pos
   let scan_row = if scan_raw < max_height {
     scan_raw
   } else {
@@ -1709,9 +1717,9 @@ fn render_spectrum(
   // as the band meters — raw per-frame RMS can jump ~15dB on a transient hit,
   // which made the 44-cell bar lurch by 10+ cells in a single frame.
   let rms_db = if raw_db >= ctx.rms_level {
-    ctx.rms_level * 0.55 + raw_db * 0.45
+    ctx.rms_level * 0.72 + raw_db * 0.28
   } else {
-    ctx.rms_level * 0.85 + raw_db * 0.15
+    ctx.rms_level * 0.92 + raw_db * 0.08
   }
   ctx.rms_level = rms_db
   let rms_pct = ((rms_db + 60.0) / 60.0).clamp(min=0.0, max=1.0)

@@ -255,8 +255,12 @@ The `WV` line is a Braille-dot oscilloscope (like cli-visualizer's wave mode):
 120 samples trace a continuous curve through 2×4 dot cells, auto-gained per
 window so quiet passages keep their shape. `BASS / MID / TREB` meters and the
 `RMS` bar all use the same absolute -60..0 dB scale as the spectrum.
-Terminal height is **auto-detected** via `LINES` env var — the frame always
-fits exactly, without scroll flicker. Terminals shorter than 24 lines
+Rendering runs at **~42 fps** (16 ms tick) while the FFT/data update stays on
+a 48 ms cadence (every 2nd render frame) — all per-frame animations (rainbow
+rotation, scanline, peak-cap gravity) get double smoothness at 1x playback,
+with every decay constant rescaled to the new tick. Terminal height is
+**auto-detected** via `LINES` env var — the frame always fits exactly, without
+scroll flicker. Terminals shorter than 24 lines
 automatically drop the piano keyboard and band-meter rows (cava-style: shrink
 the chrome, keep the spectrum). Press `Ctrl+C` to stop.
 
