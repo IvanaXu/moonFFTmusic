@@ -158,6 +158,7 @@ async fn main {
   // --- Initialize peak hold arrays ---
   let peak_heights = Array::make(num_bars, 0)
   let peak_frames = Array::make(num_bars, 0)
+  let peak_speeds = Array::make(num_bars, 0.0) // cava-style gravity for caps
 
   // --- Initialize temporal smoothing state ---
   let prev_heights = Array::make(num_bars, 0)
@@ -278,6 +279,7 @@ async fn main {
       ctx,
       peak_heights,
       peak_frames,
+      peak_speeds,
       prev_heights,
       render_prev,
       heights,

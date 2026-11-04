@@ -1072,6 +1072,7 @@ fn render_spectrum(
   ctx : DisplayContext,
   peak_heights : Array[Int32],
   peak_frames : Array[Int32],
+  peak_speeds : Array[Double],
   prev_heights : Array[Int32],
   render_prev : Array[Double],
   heights : Array[Int32],
@@ -1197,18 +1198,23 @@ fn render_spectrum(
 
   // --- Pass 2c: peak hold update (after neighbor fill, so caps follow the
   // envelope instead of lagging one frame behind the propped-up valleys) ---
+  // cava-style caps: hold above the bar for a few frames, then fall with
+  // accelerating gravity (1 row/frame², capped at 3 rows/frame) instead of
+  // exponential decay — the drop starts lazy and finishes snappy.
   for bar in 0..<num_bars {
-    match (heights[bar] >= peak_heights[bar], peak_frames[bar] > 3) {
-      (true, _) => {
-        peak_heights[bar] = heights[bar]
-        peak_frames[bar] = 0
-      }
-      (false, true) => {
-        let decayed = (peak_heights[bar].to_double() * 0.88).to_int()
-        peak_heights[bar] = decayed
-        peak_frames[bar] = 0
-      }
-      (false, false) => peak_frames[bar] = peak_frames[bar] + 1
+    let h = heights[bar]
+    if h >= peak_heights[bar] {
+      peak_heights[bar] = h
+      peak_frames[bar] = 0
+      peak_speeds[bar] = 0.0
+    } else if peak_frames[bar] > 3 {
+      let sp = (peak_speeds[bar] + 8.0).clamp(min=0.0, max=24.0)
+      peak_speeds[bar] = sp
+      let dropped = (peak_heights[bar].to_double() - sp).to_int()
+      peak_heights[bar] = if dropped < h { h } else { dropped }
+      peak_frames[bar] = 0
+    } else {
+      peak_frames[bar] = peak_frames[bar] + 1
     }
   }
 
@@ -1480,13 +1486,11 @@ fn render_spectrum(
           sb.write_string(partial_blocks[frac])
         }
         PeakMarker => {
-          sb.write_string("\u001b[1m")
-          let peak_level = (peak_heights_d.unsafe_get(bar) + 20.0)
-            .to_int()
-            .clamp(min=10, max=nbl_minus_1)
-          sb.write_string(color_tbl.unsafe_get(bar_off + peak_level))
+          // Bright off-white cap (cava convention): the ━ glyph carries the
+          // distinction in monochrome, the glow makes it pop off the rainbow.
+          sb.write_string("\u001b[1;38;2;246;246;232m")
           sb.write_string("━")
-          sb.write_string("\u001b[22m")
+          sb.write_string("\u001b[0m")
         }
         Empty =>
           if ctx.is_grid[bar] {
