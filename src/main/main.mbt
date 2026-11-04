@@ -244,7 +244,6 @@ async fn main {
   // Precompute total time string (invariant across frames)
   let total_time_str = format_time(total, wav.sample_rate)
   let mut pos = 0
-  let mut frame_count = 0
   // Values computed on data frames; render frames reuse the last snapshot.
   let mut rms = 0.0
   let mut beat_intensity = 0.0
@@ -366,7 +365,6 @@ async fn main {
       pos += hop_size
       data_frame_count += 1
     }
-    frame_count += 1
   }
 
   // --- Playback complete ---
