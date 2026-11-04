@@ -108,6 +108,9 @@ async fn main {
   // --- Device selection: GPU when detectable, CPU fallback ---
   let device = select_device()
   println("Compute device: \{device_label(device)}")
+  // Terminal window title (btop/cmus convention) so the tab reads as the app,
+  // not as the raw command line.
+  println("\u001b]2;🎵 MoonFFTmusic — Spectrum Analyzer\u0007")
 
   // --- Check if WAV file exists ---
   guard @fs.exists(wav_path) else {

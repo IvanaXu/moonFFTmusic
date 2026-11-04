@@ -1354,8 +1354,30 @@ fn render_spectrum(
   let beat_indicator = if beat_pulse > 0.5 { " ♫" } else { "" }
   let bpm_str = if bpm > 0.0 { " | \{bpm.to_int()} BPM" } else { "" }
   // Colour-code the info line so live values read above static labels:
-  // dim labels, cyan peak frequency, yellow note, green BPM, dim time.
+  // dim labels, accent peak frequency, accent note, accent BPM, dim time.
+  // Accents follow the palette — cool cyan/yellow on rainbow, gold/coral on
+  // fire, icy blue/violet on ice — so the header belongs to its scheme.
   let info_dim = "\u001b[38;2;120;132;158m"
+  let accent_freq = match ctx.scheme {
+    1 => "\u001b[1;38;2;255;190;90m"
+    2 => "\u001b[1;38;2;150;220;255m"
+    _ => "\u001b[1;38;2;110;220;240m"
+  }
+  let accent_note = match ctx.scheme {
+    1 => "\u001b[38;2;255;145;115m"
+    2 => "\u001b[38;2;200;180;255m"
+    _ => "\u001b[38;2;250;205;90m"
+  }
+  let accent_beat = match ctx.scheme {
+    1 => "\u001b[1;38;2;255;120;90m"
+    2 => "\u001b[1;38;2;170;220;255m"
+    _ => "\u001b[1;38;2;255;170;90m"
+  }
+  let accent_bpm = match ctx.scheme {
+    1 => "\u001b[38;2;255;170;120m"
+    2 => "\u001b[38;2;150;230;230m"
+    _ => "\u001b[38;2;150;220;130m"
+  }
   let rate_str = "\{sample_rate}Hz | FFT \{fft_size}"
   let freq_str = format_freq(dominant_freq_int)
   let note_str = " (\{note_name})"
@@ -1409,18 +1431,18 @@ fn render_spectrum(
     sb.write_string(info_dim)
     sb.write_string(rate_str)
     sb.write_string(" | Peak ")
-    sb.write_string("\u001b[1;38;2;110;220;240m")
+    sb.write_string(accent_freq)
     sb.write_string(freq_str)
-    sb.write_string("\u001b[38;2;250;205;90m")
+    sb.write_string(accent_note)
     sb.write_string(note_str)
     sb.write_string(info_dim)
     if beat_pulse > 0.5 {
-      sb.write_string("\u001b[1;38;2;255;170;90m")
+      sb.write_string(accent_beat)
       sb.write_string(" ♫")
       sb.write_string(info_dim)
     }
     if bpm > 0.0 {
-      sb.write_string("\u001b[38;2;150;220;130m")
+      sb.write_string(accent_bpm)
       sb.write_string(bpm_str)
       sb.write_string(info_dim)
     }

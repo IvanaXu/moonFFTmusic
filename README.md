@@ -183,9 +183,10 @@ Pick a palette with the third argument: `./run.sh assets/test.wav 1024 <scheme>`
 | `ice` | Violet base → cyan crest, painted by loudness — a cold crystalline look |
 
 `fire`/`ice` also recolour the scheme-aware accents: the beat border glows
-amber / crystal instead of cyan, and the `WV` waveform traces a warm ember
-ramp instead of the cool blue one — so no data element clashes with its
-palette. The progress bar (cyan→violet) and the level meters (green→red)
+amber / crystal instead of cyan, the header's Peak / note / BPM values shift
+to warm gold-coral / icy blue-violet, and the `WV` waveform traces a warm
+ember ramp instead of the cool blue one — so no data element clashes with its
+palette. The app also sets the terminal window title (OSC 2), like btop. The progress bar (cyan→violet) and the level meters (green→red)
 stay scheme-independent: they are UI semantics, not data.
 
 `rainbow` keeps colour = frequency; `fire`/`ice` trade that for a height-coded
