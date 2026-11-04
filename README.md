@@ -3,7 +3,7 @@
 [![CI](https://github.com/IvanaXu/moonFFTmusic/actions/workflows/ci.yml/badge.svg)](https://github.com/IvanaXu/moonFFTmusic/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-> https://mooncakes.io/docs/IvanAXu/moonFFTmusic@0.1.3
+> https://mooncakes.io/docs/IvanAXu/moonFFTmusic@0.1.4
 
 A real-time audio spectrum visualizer written in [MoonBit](https://www.moonbitlang.com/).
 It reads a WAV file, performs Fast Fourier Transform (FFT) on audio chunks, and
@@ -45,7 +45,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | 10 | Bottom glow reflection | 3-row dim mirror of spectrum with fading intensity |
 | 11 | Dashed reference line | `┄` pattern at -12dB, `·` at gap positions |
 | 12 | Bar tops | Top cell is a fractional block flush on the body (no half-cell gap) |
-| 13 | Peak frequency marker | Yellow `▼` arrow above dominant frequency bar |
+| 13 | Peak frequency marker | Dominant bar's contour glyph glows yellow on the envelope row |
 | 14 | Vertical frequency grid | Faint `╎` at label positions (50Hz – 10kHz) |
 | 15 | Magnitude-based color | Brightness = 50% row position + 50% magnitude ratio |
 | 16 | **True-color 24-bit RGB gradient** | Smooth HSL-based rainbow (blue→cyan→green→yellow→red) with a white-glow core, using `\u001b[38;2;R;G;Bm`, precomputed per-bar |
@@ -80,7 +80,7 @@ displays a live frequency spectrum as a beautiful ANSI bar chart in the terminal
 | `bar_fade` array | `Array::make` per frame | Reusable field in `PeakTrail` | Eliminates 1 array allocation/frame |
 | Height double conversion | `to_double()` × `height_factor` per bar per row | Precomputed `heights_d[]` before row loop | Eliminates 2400 `to_double`+multiply/frame |
 | IIR anti-flicker state | `Array[Int32]` (integer IIR can't eliminate ±1 oscillation) | `Array[Double]` (float IIR before quantization) | Eliminates residual ±1 flicker |
-| Dominant bar marker | Raw `dominant_bar` recomputed per frame | Sticky `dom_bar` passed from `main.mbt` | Eliminates ▼ marker jumping |
+| Dominant bar marker | Raw `dominant_bar` recomputed per frame | Sticky `dom_bar` passed from `main.mbt` | Eliminates dominant-marker jumping |
 | Rainbow hue rotation | `rotate_hue()` 1920 string allocs/frame | Precomputed 40 color tables, swap index | Zero per-frame string allocs |
 | `heights_d`/`peak_heights_d` | `Array::make` per frame | Pre-allocated in `DisplayContext` | Eliminates 120 Double allocs/frame |
 | Terminal height | Fixed `max_height=26` (45 lines/frame) | Auto-detect `LINES` env var | Eliminates scroll flicker on small terminals |
@@ -121,7 +121,7 @@ builds the project, and starts the visualizer.
 cd moonFFTmusic
 
 # Step 1: Generate a test WAV file
-python3 scripts/gen_wav.py assets/test.wav 440.0     # 440Hz sine wave (A4)
+python3 scripts/gen_wav.py assets/test.wav music     # 120BPM loop: kick+bass+chords+hats
 python3 scripts/gen_wav.py assets/chord.wav chord    # Chord: 220+440+880+2000Hz
 
 # Step 2: Build the project
@@ -172,48 +172,105 @@ The chosen device is printed on startup, e.g. `Compute device: GPU (NVIDIA, /dev
 
 Valid FFT sizes: `256`, `512`, `1024`, `2048`, `4096`, `8192`, ...
 
+### Colour schemes (cava-style)
+
+Pick a palette with the third argument: `./run.sh assets/test.wav 1024 <scheme>`
+
+| Scheme | Description |
+|--------|-------------|
+| `rainbow` (default) | Hue anchored to frequency (indigo bass → red treble) with an aurora hue rotation |
+| `fire` | Red base → yellow crest, painted by loudness — every column shares one flame ramp |
+| `ice` | Violet base → cyan crest, painted by loudness — a cold crystalline look |
+
+`fire`/`ice` also recolour the scheme-aware accents: the beat border glows
+amber / crystal instead of cyan, the header's Peak / note / BPM values shift
+to warm gold-coral / icy blue-violet, and the `WV` waveform traces a warm
+ember ramp instead of the cool blue one — so no data element clashes with its
+palette. The app also sets the terminal window title (OSC 2), like btop. The progress bar (cyan→violet) and the level meters (green→red)
+stay scheme-independent: they are UI semantics, not data.
+
+`rainbow` keeps colour = frequency; `fire`/`ice` trade that for a height-coded
+gradient (cava semantics), so the waterfall follows the same ramp.
+
 Larger FFT sizes give better frequency resolution but slower time response.
 Smaller sizes give better time resolution but coarser frequency bins.
 
 ### What you'll see
 
 ```
-╔══════════════════════════════════════════════════════════════════╗
-║ 🎵 MoonFFTmusic — Real-time Spectrum Analyzer                    ║
-║ 44100Hz | FFT 1024 | Peak 473Hz (A#4+) ♫ | 0:0.2                 ║
-╚══════════════════════════════════════════════════════════════════╝
-──────────────────────────────────────────────────────────────────
-     ╎                            ▼     ╎        ╎      ╎
- 0dB ╎                            ╎     ╎        ╎      ╎
-│   ╎                            ╎     ╎        ╎      ╎
-│   ╎┄┄·┄┄·┄┄·┄┄·┄┄·┄┄·┄┄·┄┄·┄┄·╎┄·┄┄·╎┄┄·┄┄·┄╎┄·┄┄·┄┄·┄╎
-│   ╎          ▂▀ ▀▀▀ ▂▅ ▀▇    ▆     ╎        ╎      ╎
-│   ╎          ▀█ ███ █▀ █▀    ▀     ╎▅       ╎      ╎
-│   ╎       ▁▅ ██ ██ ███ █▀  ▃ █▃    ╎█       ╎      ╎
-│   ▆▆ ▆▆ ▆█ ██ ██ ███ ███ ██▀ ███ ▂ ╎██▂ ▂▂  ╎▂▂ ▂▂ ╎▂▂▂
-     ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀
-     ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀▀ ▀
-      50Hz   100Hz 200Hz    500Hz  1kHz  2kHz     5kHz   10kHz
-  WV ─▔──▔─▁─▔──▁▁─▔───▔▁─▔──▁▁▔▔───▔─▁─▔──▁▁──▔──▁─▔─▁▔──
-
-RMS: [████████████████░░░░] -6.0 dB
-║║║║║║║║║║║║║║║║║║║║║║║║║║▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 44%  0:0.2 / 0:0.5
+╔━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╗
+║         🎵 MoonFFTmusic — Real-time Spectrum Analyzer          ║
+║ 44100Hz | FFT 1024 | Peak 43Hz (F1-) ♫ | 120 BPM | 0:1.0       ║
+╚━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╝
+│     ╱────╱╱──────────────╲╲∨╱╱──╲╲╲╲──────────────╱╱──∨──╲╲─────
+│              🎹 ▮▏│▏││▏│▏│▏││▏│▏││▏│▏│▏│ C3-C5 ♥  ○○●○          
+│0dB   ╎     ████████████▆▃  ╎      ╎     ╎        ╎      ╎       
+│      ╎     ██████████████  ╎      ╎     ╎        ╎      ╎       
+│      ━━━━━━██████████████  ╎      ╎     ╎        ╎      ╎       
+│      ━━━━━▇██████████████  ╎      ╎     ╎        ╎      ╎       
+│      ━━━━━███████████████━━╎   ▁  ╎     ╎        ╎      ╎       
+│      ━━━━━███████████████━━╎   █━ ╎     ╎        ╎      ╎       
+│      ━━━━━███████████████━━╎  ██━ ╎     ╎        ╎      ╎       
+│-6dB  ━━━━▇███████████████▄━╎  ██━ ╎     ╎        ╎      ╎       
+│     ┄━━━━█████████████████━╎┄┄██━┄╎┄┄┄┄┄╎┄┄┄┄┄┄┄┄╎┄┄┄┄┄┄╎┄┄┄┄┄┄┄
+│      ━━━━█████████████████━╎  ██━ ╎     ╎        ╎      ╎       
+│      ▆▆▆▆█████████████████━╎  ██━ ╎     ╎        ╎      ╎       
+│      █████████████████████━╎  ██━ ╎     ╎        ╎      ╎       
+│     ━█████████████████████━━ ━██▆ ╎     ╎        ╎      ╎       
+│     ━█████████████████████━━━━███━╎     ╎        ╎      ╎       
+│-12dB━█████████████████████━━━▅███━╎     ╎        ╎      ╎       
+│     ━█████████████████████━━━████━╎     ╎        ╎      ╎       
+│     ━██████████████████████━━████━╎     ╎        ╎  ━━  ╎       
+│     ▇██████████████████████━━████━╎     ╎        ╎  ━━ ━━       
+│     ███████████████████████━━████━╎     ╎        ╎  ━━ ━━       
+│     ███████████████████████━━████▇╎     ╎        ╎  ▃▃━━━       
+│-18dB███████████████████████━▃█████━     ╎        ╎  ██━▄▄       
+│     ███████████████████████▃██████━     ╎        ╎  ██▁██       
+│     ██████████████████████████████━     ╎        ╎ ━█████━      
+│     ██████████████████████████████▂     ╎        ╎ ━█████━      
+│     ███████████████████████████████     ╎        ╎ ▇█████▃      
+│     ███████████████████████████████━    ╎        ╎ ███████      
+│     ███████████████████████████████▁    ╎        ╎━███████━     
+│-24dB████████████████████████████████    ╎        ╎████████▄     
+│     ████████████████████████████████▁   ╎        ━█████████━    
+│     █████████████████████████████████   ╎        ██████████▆    
+│     █████████████████████████████████▆  ╎       ▅███████████▄   
+│     ██████████████████████████████████▇▂╎     ▁▆█████████████▅▁ 
+│     ████████████████████████████████████▆▄▃▃▄▆█████████████████▆
+└─────────────────────────────────────────────────────────────────
+       50Hz   100Hz 200Hz    500Hz  1kHz  2kHz     5kHz   10kHz   
+   WV ⠴⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠲⠖⠒⠒⠒⠒⠒⠒⠒⠦⠤⠤⠤⢤⣀⡤⣄⣀⣀⣀⣀⣀⣀⣠⠤⠖⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠶⠒⠒⠒
+      BASS ██████████░░░░ MID  ████████░░░░░░ TREB ███░░░░░░░░░░░ 
+      RMS: [████████████████████████████████░░░░░░░░░░░░] -16.9 dB
+      ║║║║║║║║║║║║║║║║║║║║║▓░░░░░░░░░░░░░░░░░░░░ 50% 0:1.0 / 0:2.0
 ```
 
 Bars use smooth 24-bit true-color RGB gradient with **rainbow hue rotation** —
 the entire color spectrum flows and shifts over time like an aurora.
 The header border **flashes white-yellow** on strong beats (═ → ━).
-Below the main bars, a **mirror reflection** shows inverted bars with fading
-brightness, creating a 3D water-reflection depth illusion.
-The `WV` line shows the time-domain waveform; `EN` shows energy history sparkline.
-Terminal height is **auto-detected** via `LINES` env var — the display adapts
-to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
+Below the main bars, a **3-row spectrogram waterfall** shows recent spectrum
+history: each column keeps the same hue as its live bar, and the newest row is
+the brightest so the three rows read as a time sequence.
+The `WV` line is a Braille-dot oscilloscope (like cli-visualizer's wave mode):
+120 samples trace a continuous curve through 2×4 dot cells, auto-gained per
+window so quiet passages keep their shape. `BASS / MID / TREB` meters and the
+`RMS` bar all use the same absolute -60..0 dB scale as the spectrum.
+Rendering runs at **~42 fps** (16 ms tick) while the FFT/data update stays on
+a 48 ms cadence (every 2nd render frame) — all per-frame animations (rainbow
+rotation, scanline, peak-cap gravity) get double smoothness at 1x playback,
+with every decay constant rescaled to the new tick. Terminal height is
+**auto-detected** via `LINES` env var — the frame always fits exactly, without
+scroll flicker. Terminals shorter than 24 lines
+automatically drop the piano keyboard and band-meter rows (cava-style: shrink
+the chrome, keep the spectrum). Press `Ctrl+C` to stop.
 
 ### Visual Effects (14 dynamic effects)
 
 | Effect | Description |
 |--------|-------------|
-| 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
+| 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora (rainbow scheme) |
+| 🏔️ Monstercat smoothing | Neighbor fill from cava: tall bars prop up valleys (`h[j] ← h[i]/1.5^|i-j|`), reading as continuous ridges instead of sawtooth |
+| 📌 Peak caps | cava-style: bright-white `━` cap holds above each bar, then falls with accelerating gravity |
 | ⚡ Beat flash border | Accents flash white-hot, soft beats warm; `═`→`━` on strong hits |
 | 💥 Beat bloom | Fast beat pulse + sustained intensity brighten all bars |
 | 👑 Bar top crown | Topmost fractional cell gets +8 brightness — glowing crest |
@@ -222,7 +279,7 @@ to fit your terminal without scroll flicker. Press `Ctrl+C` to stop.
 | 📊 Progress pulse | Cyan→violet progress bar (distinct from spectrum) pulses on beats |
 | 🎚️ RMS beat glow | RMS label turns yellow on strong beats |
 | 🌊 Spectrogram waterfall | 3-row scrolling history; per-frequency hue (matches bars) with intensity brightness |
-| 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted ▼ |
+| 🎹 Piano keyboard | 2-octave mini keyboard with detected note highlighted `▮` |
 | 🎵 BPM estimation | Beat timing analysis with ♥/♡ indicator and BPM display in header |
 | 🥁 Rhythm indicator | 4-step beat marker advancing with each detected beat |
 | 🔊 Frequency band meters | BASS/MID/TREBLE 10-cell horizontal energy meters |
@@ -235,7 +292,7 @@ This project leverages MoonBit-specific features for performance and safety:
 
 | Feature | Usage |
 |---------|-------|
-| `derive(Debug)` | Auto-generated debug output for `Complex` and `WavData` structs |
+| `#derive(Debug)` | Auto-generated debug output for `Complex`, `WavData`, `GpuInfo`, `ComputeDevice` |
 | `Array::unsafe_get`/`unsafe_set` | Bypass bounds check in FFT butterfly hot loop (SoA) |
 | `Array::mapi_in_place` | In-place Hann window application (Complex path) |
 | `Array::makei` | Functional array construction for precomputed tables |
@@ -243,7 +300,7 @@ This project leverages MoonBit-specific features for performance and safety:
 | `Double::clamp` / `Int32::clamp` | Safe value clamping with labeled arguments |
 | `match` patterns | Chunk type dispatch, arg parsing, bar render states, HSL→RGB |
 | `guard` patterns | Early return on file not found / parse failure |
-| `test` blocks | 25 inline tests for FFT correctness, SoA FFT, WAV parsing, args |
+| `test` blocks | 32 inline tests for FFT correctness, SoA FFT, WAV parsing, args |
 | `enum` + `match` | `ChunkType`/`BarState` enums for dispatch |
 | `mut` struct fields | Mutable `BeatDetector` state (history_idx, beat_intensity) |
 | Bit tricks | `n & (n-1)` for power-of-2 check, bit-reversal permutation |
@@ -253,26 +310,25 @@ This project leverages MoonBit-specific features for performance and safety:
 ## Testing
 
 ```bash
-# Run all 25 inline tests
+# Run all 32 inline tests
 moon test --target native
 
 # Type check with no warnings
 moon check --target native --deny-warn
 
 # Format check
-moon fmt && git diff --exit-code
+moon fmt --check
 ```
 
 ## CI
 
-GitHub Actions CI runs on every push and pull request:
+GitHub Actions CI runs on every push to `main`/`dev*` and on every pull request.
 
-1. **Check & Format** — `moon check --deny-warn` + `moon fmt` diff check
-2. **Build & Test** — `moon build` + `moon test` (25 inline tests)
-3. **Integration** — Generate WAV files, run visualizer, verify output, test
-   multiple FFT sizes, verify error handling
-
-Matrix: Ubuntu + macOS (native target only).
+1. **Build & Test** (Ubuntu + macOS) — `moon check` and `moon fmt --check` run as
+   advisory checks (toolchain version drift must not fail CI); `moon build` and
+   `moon test` (32 inline tests) are blocking
+2. **Integration** (Ubuntu) — Generate WAV files, run visualizer, verify output,
+   test multiple FFT sizes, verify error handling
 
 ## Project Structure
 
@@ -283,13 +339,14 @@ moonFFTmusic/
 │   ├── moon.pkg               # Package imports
 │   ├── fft.mbt               # FFT engine (Complex + SoA) + tests
 │   ├── wav.mbt               # WAV parser + tests
+│   ├── device.mbt            # GPU/CPU device detection + selection
 │   ├── display.mbt           # ANSI renderer (18 effects, true-color, beat detection)
 │   └── main.mbt              # Entry point + SoA FFT loop + arg parsing + tests
 ├── scripts/
-│   └── gen_wav.py              # WAV file generator
+│   └── gen_wav.py            # WAV file generator (sine/chord/music modes)
 ├── assets/
 │   ├── chord.wav               # Demo chord WAV (220+440+880+2000Hz)
-│   └── test.wav                # Demo 440Hz sine WAV
+│   └── test.wav                # Demo music loop (120BPM, dynamic)
 ├── run.sh                       # Build & run script
 ├── moon.mod                   # Module definition
 └── README.md

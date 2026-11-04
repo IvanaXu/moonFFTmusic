@@ -7,6 +7,15 @@ import {
   "moonbitlang/core/string",
 }
 
+// Acknowledge experimental async/async/fs dependencies
+
+options(
+  "allow-experimental-packages": [
+    "moonbitlang/core/async",
+    "moonbitlang/core/async/fs",
+  ],
+)
+
 // Only native target supports file I/O and terminal output
 
 supported_targets = "-all+native"

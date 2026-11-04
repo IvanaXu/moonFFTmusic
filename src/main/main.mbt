@@ -21,6 +21,18 @@ fn is_power_of_two(n : Int32) -> Bool {
 }
 
 ///|
+/// Scheme name → palette id. Unknown names fall back to rainbow (caller
+/// prints a warning for typos).
+fn parse_scheme(arg : String?) -> Int32 {
+  let mut id = 0
+  match arg {
+    Some(s) => if s == "fire" { id = 1 } else if s == "ice" { id = 2 }
+    None => ()
+  }
+  id
+}
+
+///|
 fn parse_fft_size(arg : String?) -> Int32 {
   match arg {
     Some(s) => @string.parse_int(s) catch { _ => 1024 }
@@ -36,9 +48,17 @@ async fn main {
     n if n < 2 => {
       println("🎵 moonFFTmusic — Real-time Spectrum Analyzer")
       println("")
-      println("Usage: moonFFTmusic <wav_file> [fft_size]")
+      println("Usage: moonFFTmusic <wav_file> [fft_size] [scheme]")
       println("  wav_file:  path to WAV file (16-bit PCM)")
       println("  fft_size:  FFT window size, power of 2 (default: 1024)")
+      println("  scheme:    colour palette (default: rainbow)")
+      println("             rainbow — hue anchored to frequency, aurora flow")
+      println(
+        "             fire    — red base → yellow crest, painted by height",
+      )
+      println(
+        "             ice     — violet base → cyan crest, painted by height",
+      )
       println("")
       println("Device:    GPU auto-selected when detected, CPU fallback")
       println("  (CUDA_VISIBLE_DEVICES=-1 forces CPU)")
@@ -62,6 +82,21 @@ async fn main {
       None
     },
   )
+  // Colour scheme (cava-style): rainbow (default), fire or ice
+  let mut scheme_name = "rainbow"
+  let mut scheme_known = true
+  if args.length() >= 4 {
+    scheme_name = args[3]
+    if scheme_name != "rainbow" && scheme_name != "fire" && scheme_name != "ice" {
+      scheme_known = false
+    }
+  }
+  if !scheme_known {
+    println(
+      "Warning: unknown scheme '\{scheme_name}' — falling back to rainbow (options: rainbow, fire, ice)",
+    )
+  }
+  let scheme = parse_scheme(if scheme_known { Some(scheme_name) } else { None })
 
   // --- Validate FFT size ---
   if !is_power_of_two(fft_size) || fft_size < 256 {
@@ -73,6 +108,9 @@ async fn main {
   // --- Device selection: GPU when detectable, CPU fallback ---
   let device = select_device()
   println("Compute device: \{device_label(device)}")
+  // Terminal window title (btop/cmus convention) so the tab reads as the app,
+  // not as the raw command line.
+  println("\u001b]2;🎵 MoonFFTmusic — Spectrum Analyzer\u0007")
 
   // --- Check if WAV file exists ---
   guard @fs.exists(wav_path) else {
@@ -96,39 +134,57 @@ async fn main {
   // --- Display configuration ---
   let num_bars = 60
   // Auto-detect terminal height to prevent scroll flicker.
-  // Fixed overhead per frame: 4(header) + 1(peak) + 1(trail) + 3(glow)
-  //   + 1(labels) + 1(waveform) + 1(sparkline) + 1(RMS) + 1(progress) = 14
-  // max_height = terminal_lines - 14, clamped to [8, 40]
-  let max_height = match @env.get_env_var("LINES") {
+  // Fixed overhead per frame: 4(header) + 1(connector) + 1(piano) + 1(baseline)
+  //   + 3(waterfall) + 1(labels) + 1(waveform) + 1(bands) + 1(RMS)
+  //   + 1(progress) = 15
+  // max_height = terminal_lines - 15, clamped to [4, 40]
+  // Terminals shorter than 24 lines cannot fit every row: the piano keyboard
+  // and the band meters are dropped there (cava does the same — shrink the
+  // chrome before letting the frame scroll), bringing the overhead down to 13.
+  let lines = match @env.get_env_var("LINES") {
     Some(s) => {
       // Parse LINES env var to int
-      let mut lines = 0
+      let mut n = 0
       let mut valid = false
       for c in s {
         if c >= '0' && c <= '9' {
-          lines = lines * 10 + (c.to_int() - '0'.to_int())
+          n = n * 10 + (c.to_int() - '0'.to_int())
           valid = true
         }
       }
       if valid {
-        (lines - 14).clamp(min=8, max=40)
+        n
       } else {
-        12
+        26
       }
     }
-    None => 12 // default: fits 26-line terminal
+    None => 26 // no LINES reported — assume a 26-line terminal
   }
+  let show_piano = lines >= 24
+  let show_bands = lines >= 24
+  // Base overhead (13) = 4(header) + 1(connector) + 1(baseline) + 3(waterfall)
+  //   + 1(labels) + 1(waveform) + 1(RMS) + 1(progress)
+  // The piano and band-meter rows exist only on tall terminals.
+  let overhead = 13 +
+    (if show_piano { 1 } else { 0 }) +
+    (if show_bands { 1 } else { 0 })
+  let max_height = (lines - overhead).clamp(min=4, max=40)
   let sub_res = 8
   // Frame pacing: ~real-time playback at ~20 fps.
   // Each frame advances the analysis window by one target interval (50 ms) of
   // audio; sleep pacing leaves ~10 ms per frame for rendering, so the wall
-  // clock period is close to 50 ms and playback runs near real time. For CD
+  // clock period is close to 48 ms and playback runs near real time. For CD
   // audio the hop exceeds fft_size, so the FFT slides without overlap — a small
   // spectral-smoothness trade for speed. Previously it advanced only fft_size/2
   // per 50 ms, i.e. ~0.2× real time. Floor at fft_size/2 for low sample rates.
-  let sleep_ms : Int32 = 40
-  let analysis_interval_ms : Int32 = 50
-  let realtime_hop = wav.sample_rate * analysis_interval_ms / 1000
+  // Rendering runs at ~50 fps (16 ms sleep + ~8 ms work); the FFT/data update
+  // runs every 2nd render frame so playback stays at 1x while per-frame
+  // animations (rainbow rotation, scanline, cap gravity) get double smoothness.
+  // All decay constants in the renderer are rescaled for 24 ms frames.
+  let sleep_ms : Int32 = 16
+  let data_every : Int32 = 2
+  let data_interval_ms : Int32 = 48
+  let realtime_hop = wav.sample_rate * data_interval_ms / 1000
   let hop_size = if realtime_hop > fft_size / 2 {
     realtime_hop
   } else {
@@ -149,6 +205,9 @@ async fn main {
     fft_size / 2,
     wav.sample_rate,
     fft_size,
+    show_piano,
+    show_bands,
+    scheme,
   )
 
   // --- Initialize beat detector ---
@@ -157,6 +216,7 @@ async fn main {
   // --- Initialize peak hold arrays ---
   let peak_heights = Array::make(num_bars, 0)
   let peak_frames = Array::make(num_bars, 0)
+  let peak_speeds = Array::make(num_bars, 0.0) // cava-style gravity for caps
 
   // --- Initialize temporal smoothing state ---
   let prev_heights = Array::make(num_bars, 0)
@@ -169,7 +229,7 @@ async fn main {
   let mag_sq = Array::make(half, 0.0) // mag² for all bins (no sqrt)
   let magnitudes = Array::make(num_bars, 0.0) // aggregated magnitudes per bar
   let heights = Array::make(num_bars, 0) // bar heights (reusable)
-  let waveform = Array::make(num_bars, 0.0) // waveform display data
+  let waveform = Array::make(120, 0.0) // waveform display data (2 samples per braille cell)
 
   // --- Print initial info ---
   println("Loading WAV file: \{wav_path}")
@@ -184,66 +244,70 @@ async fn main {
   // Precompute total time string (invariant across frames)
   let total_time_str = format_time(total, wav.sample_rate)
   let mut pos = 0
-  let mut frame_count = 0
+  // Values computed on data frames; render frames reuse the last snapshot.
+  let mut rms = 0.0
+  let mut beat_intensity = 0.0
   // Sticky dominant bar — resists jitter when multiple bars have similar magnitude.
   // Only switch when the new bar is >20% stronger or >3 positions away.
   let mut last_dom_bar = 0
+  let mut data_phase = 0
+  let mut data_frame_count = 0
   while pos + fft_size <= total {
-    // Step 1-3 FUSED: Load samples + compute RMS + apply Hann window in one pass
-    // (eliminates 2 separate loops over fft_size = 2048 iterations saved per frame)
-    let mut sum_sq = 0.0
-    for i in 0..<fft_size {
-      let s = wav.samples.unsafe_get(pos + i)
-      sum_sq += s * s
-      re.unsafe_set(i, s * hann.unsafe_get(i))
-      im.unsafe_set(i, 0.0)
-    }
-    let rms = (sum_sq / fft_size.to_double()).sqrt()
-
-    // Step 4: Compute SoA FFT (in-place, zero allocations)
-    fft_soa(re, im, tw_re, tw_im, bit_rev)
-
-    // Step 5: Compute mag² for ALL bins (NO sqrt — just re²+im²)
-    for i in 0..<half {
-      let r = re.unsafe_get(i)
-      let imv = im.unsafe_get(i)
-      mag_sq.unsafe_set(i, r * r + imv * imv)
-    }
-
-    // Step 6: Bin aggregation — for each bar, find max mag² in bin range,
-    // then sqrt only once per bar (60 sqrts vs 512)
-    let bin_starts = ctx.bin_starts
-    let bin_ends = ctx.bin_ends
-    for bar in 0..<num_bars {
-      let start = bin_starts.unsafe_get(bar)
-      let end = bin_ends.unsafe_get(bar)
-      let mut max_sq = 0.0
-      for bin_idx in start..<end {
-        let sq = mag_sq.unsafe_get(bin_idx)
-        if sq > max_sq {
-          max_sq = sq
-        }
+    if data_phase == 0 {
+      // Step 1-8 (data frame only, every 2nd render frame): window, FFT,
+      // aggregate, beat update, waveform fill. On render frames these arrays
+      // keep their previous values so all IIR/decay state stays coherent.
+      let mut sum_sq = 0.0
+      for i in 0..<fft_size {
+        let s = wav.samples.unsafe_get(pos + i)
+        sum_sq += s * s
+        re.unsafe_set(i, s * hann.unsafe_get(i))
+        im.unsafe_set(i, 0.0)
       }
-      magnitudes.unsafe_set(bar, max_sq.sqrt())
-    }
+      rms = (sum_sq / fft_size.to_double()).sqrt()
 
-    // Step 7: Update beat detector + energy sparkline + peak trail
-    // Current time in seconds for BPM estimation
-    let current_time = pos.to_double() / wav.sample_rate.to_double()
-    let beat_intensity = beat_detector.update(rms, current_time)
+      fft_soa(re, im, tw_re, tw_im, bit_rev)
 
-    // Step 8: Fill waveform array in-place (no allocation)
-    let wav_samples = wav.samples
-    for i in 0..<num_bars {
-      let idx = pos + i * fft_size / num_bars
-      waveform.unsafe_set(
-        i,
-        if idx < total {
-          wav_samples.unsafe_get(idx)
-        } else {
-          0.0
-        },
-      )
+      for i in 0..<half {
+        let r = re.unsafe_get(i)
+        let imv = im.unsafe_get(i)
+        mag_sq.unsafe_set(i, r * r + imv * imv)
+      }
+
+      let bin_starts = ctx.bin_starts
+      let bin_ends = ctx.bin_ends
+      for bar in 0..<num_bars {
+        let start = bin_starts.unsafe_get(bar)
+        let end = bin_ends.unsafe_get(bar)
+        let mut max_sq = 0.0
+        for bin_idx in start..<end {
+          let sq = mag_sq.unsafe_get(bin_idx)
+          if sq > max_sq {
+            max_sq = sq
+          }
+        }
+        magnitudes.unsafe_set(bar, max_sq.sqrt())
+      }
+
+      // Current time in seconds for BPM estimation
+      let current_time = pos.to_double() / wav.sample_rate.to_double()
+      beat_intensity = beat_detector.update(rms, current_time)
+
+      // Waveform: 120 samples = 2 per braille cell, spanning one FFT window.
+      let wav_samples = wav.samples
+      let wave_pts = 120
+      for i in 0..<wave_pts {
+        let idx = (pos.to_double() +
+        i.to_double() * fft_size.to_double() / wave_pts.to_double()).to_int()
+        waveform.unsafe_set(
+          i,
+          if idx < total {
+            wav_samples.unsafe_get(idx)
+          } else {
+            0.0
+          },
+        )
+      }
     }
 
     // Step 9: Render and display (all arrays reused, zero alloc)
@@ -267,13 +331,15 @@ async fn main {
     } else {
       last_dom_bar
     }
-    // Rainbow hue rotation: swap to precomputed color table (zero alloc)
-    ctx.color_table_idx = frame_count % 40
+    // Rainbow hue rotation: one table per DATA frame (keeps 75°/s at 50 fps)
+    ctx.color_table_idx = data_frame_count % ctx.num_color_tables
+    ctx.data_frame_parity = data_phase
     let display = render_spectrum(
       magnitudes,
       ctx,
       peak_heights,
       peak_frames,
+      peak_speeds,
       prev_heights,
       render_prev,
       heights,
@@ -293,9 +359,12 @@ async fn main {
     // Step 10: Sleep to control refresh rate
     @async.sleep(sleep_ms)
 
-    // Step 11: Advance with overlap
-    pos += hop_size
-    frame_count += 1
+    // Advance the data clock: audio hops once per DATA frame (2 render frames)
+    data_phase = (data_phase + 1) % data_every
+    if data_phase == 0 {
+      pos += hop_size
+      data_frame_count += 1
+    }
   }
 
   // --- Playback complete ---
