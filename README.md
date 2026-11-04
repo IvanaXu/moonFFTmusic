@@ -182,6 +182,12 @@ Pick a palette with the third argument: `./run.sh assets/test.wav 1024 <scheme>`
 | `fire` | Red base → yellow crest, painted by loudness — every column shares one flame ramp |
 | `ice` | Violet base → cyan crest, painted by loudness — a cold crystalline look |
 
+`fire`/`ice` also recolour the scheme-aware accents: the beat border glows
+amber / crystal instead of cyan, and the `WV` waveform traces a warm ember
+ramp instead of the cool blue one — so no data element clashes with its
+palette. The progress bar (cyan→violet) and the level meters (green→red)
+stay scheme-independent: they are UI semantics, not data.
+
 `rainbow` keeps colour = frequency; `fire`/`ice` trade that for a height-coded
 gradient (cava semantics), so the waterfall follows the same ramp.
 

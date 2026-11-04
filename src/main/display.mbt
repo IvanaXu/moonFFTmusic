@@ -143,6 +143,9 @@ struct DisplayContext {
   // terminal is too short to fit the full frame (see main.mbt overhead calc).
   show_piano : Bool
   show_bands : Bool
+  // Active palette (0 rainbow / 1 fire / 2 ice) — drives scheme-aware accents
+  // (beat border calm colour, waveform amplitude ramp).
+  scheme : Int32
   // Waveform amplitude colors (256 levels, dim gray-blue → bright cyan)
   wave_amp_colors : Array[String]
   bar_offsets : Array[Int32]
@@ -884,9 +887,19 @@ fn create_display_context(
   // cyan (no glyphs baked in: the Braille renderer supplies its own dot chars).
   let wave_amp_colors = Array::make(256, "")
   for amp in 0..<256 {
-    let r = 88 + amp * 52 / 255
-    let g = 98 + amp * 137 / 255
-    let b = 124 + amp * 131 / 255
+    // rainbow/ice keep the cool blue ramp; fire switches to a warm ember ramp
+    // so the waveform belongs to its palette instead of clashing with it.
+    let (r0, g0, b0) = match scheme {
+      1 => (120, 40, 30)
+      _ => (88, 98, 124)
+    }
+    let (r1, g1, b1) = match scheme {
+      1 => (255, 200, 80)
+      _ => (140, 235, 255)
+    }
+    let r = r0 + amp * (r1 - r0) / 255
+    let g = g0 + amp * (g1 - g0) / 255
+    let b = b0 + amp * (b1 - b0) / 255
     wave_amp_colors[amp] = "\u001b[38;2;\{r};\{g};\{b}m"
   }
   // Precompute bar offsets — eliminates per-frame Array::makei allocation
@@ -941,6 +954,7 @@ fn create_display_context(
     spectrum_baseline: baseline,
     show_piano,
     show_bands,
+    scheme,
     wave_amp_colors,
     bar_offsets: pre_bar_offsets,
     heights_d: Array::make(num_bars, 0.0),
@@ -1305,7 +1319,12 @@ fn render_spectrum(
   } else if flash > 0.3 {
     "\u001b[38;2;255;\{(60.0 + flash * 170.0).to_int()};\{(30.0 + flash * 90.0).to_int()}m"
   } else {
-    "\u001b[38;2;90;200;230m"
+    // Calm border follows the palette: cyan (rainbow) / amber (fire) / ice
+    match ctx.scheme {
+      1 => "\u001b[38;2;235;150;70m"
+      2 => "\u001b[38;2;120;200;240m"
+      _ => "\u001b[38;2;90;200;230m"
+    }
   }
   // Beat pulse: scale border thickness character on strong beats
   let border_char = if flash > 0.5 { "━" } else { "═" }
