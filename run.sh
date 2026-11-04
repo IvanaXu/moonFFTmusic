@@ -1,6 +1,6 @@
 #!/bin/bash
 # run.sh — Build and run moonFFTmusic with a test WAV file
-# Usage: ./run.sh [wav_file] [fft_size]
+# Usage: ./run.sh [wav_file] [fft_size] [scheme]
 
 set -e
 
@@ -10,6 +10,7 @@ export PATH="/root/.moon/bin:/workspace/.moon/bin:$PATH"
 # Default arguments
 WAV_FILE="${1:-assets/test.wav}"
 FFT_SIZE="${2:-1024}"
+SCHEME="${3:-rainbow}"   # rainbow | fire | ice (cava-style palettes)
 
 # Generate test WAV file if it doesn't exist
 if [ ! -f "$WAV_FILE" ]; then
@@ -25,4 +26,4 @@ moon build --target native --release
 echo "Starting spectrum visualizer..."
 echo "Press Ctrl+C to stop."
 echo ""
-./_build/native/release/build/src/main/main.exe "$WAV_FILE" "$FFT_SIZE"
+./_build/native/release/build/src/main/main.exe "$WAV_FILE" "$FFT_SIZE" "$SCHEME"

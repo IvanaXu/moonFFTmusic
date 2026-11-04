@@ -172,6 +172,19 @@ The chosen device is printed on startup, e.g. `Compute device: GPU (NVIDIA, /dev
 
 Valid FFT sizes: `256`, `512`, `1024`, `2048`, `4096`, `8192`, ...
 
+### Colour schemes (cava-style)
+
+Pick a palette with the third argument: `./run.sh assets/test.wav 1024 <scheme>`
+
+| Scheme | Description |
+|--------|-------------|
+| `rainbow` (default) | Hue anchored to frequency (indigo bass → red treble) with an aurora hue rotation |
+| `fire` | Red base → yellow crest, painted by loudness — every column shares one flame ramp |
+| `ice` | Violet base → cyan crest, painted by loudness — a cold crystalline look |
+
+`rainbow` keeps colour = frequency; `fire`/`ice` trade that for a height-coded
+gradient (cava semantics), so the waterfall follows the same ramp.
+
 Larger FFT sizes give better frequency resolution but slower time response.
 Smaller sizes give better time resolution but coarser frequency bins.
 
@@ -244,7 +257,7 @@ the chrome, keep the spectrum). Press `Ctrl+C` to stop.
 
 | Effect | Description |
 |--------|-------------|
-| 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora |
+| 🌈 Rainbow hue rotation | Color spectrum flows and shifts 3°/frame like aurora (rainbow scheme) |
 | 🏔️ Monstercat smoothing | Neighbor fill from cava: tall bars prop up valleys (`h[j] ← h[i]/1.5^|i-j|`), reading as continuous ridges instead of sawtooth |
 | 📌 Peak caps | cava-style: bright-white `━` cap holds above each bar, then falls with accelerating gravity |
 | ⚡ Beat flash border | Accents flash white-hot, soft beats warm; `═`→`━` on strong hits |

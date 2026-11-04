@@ -124,6 +124,8 @@ struct DisplayContext {
   is_grid : Array[Bool]
   color_tables : Array[Array[String]]
   mut color_table_idx : Int32
+  // Tables to rotate through: 40 for rainbow, 1 for fire/ice (no rotation)
+  num_color_tables : Int32
   row_contrib : Array[Double]
   heights_d : Array[Double]
   peak_heights_d : Array[Double]
@@ -354,9 +356,12 @@ fn precompute_bar_colors(
 ///|
 
 ///|
-/// Precompute 40 color tables with hue rotation (3 degrees per step).
-/// 40 tables × 60 bars × 32 levels = 76,800 strings (~1.5MB) at startup.
-/// Per-frame: zero allocations — just swap the table index.
+/// Precompute color tables. `scheme` selects the palette semantics:
+///   0 rainbow — hue anchored to frequency (per-bar hue ± 18° vertical
+///               gradient), `num_tables` tables rotate the hue 3°/step
+///   1 fire    — hue painted by HEIGHT: red base → yellow crest (cava style)
+///   2 ice     — violet base → cyan crest
+/// fire/ice ignore hue rotation, so callers pass num_tables = 1 for them.
 fn precompute_color_tables(
   bar_hues : Array[Double],
   bar_sats : Array[Double],
@@ -364,6 +369,7 @@ fn precompute_color_tables(
   num_bars : Int32,
   num_tables : Int32,
   hue_step : Double,
+  scheme : Int32,
 ) -> Array[Array[String]] {
   let nbl = num_brightness_levels
   let tables = Array::make(num_tables, Array::make(0, ""))
@@ -372,13 +378,26 @@ fn precompute_color_tables(
     let table = Array::make(num_bars * nbl, "")
     for bar in 0..<num_bars {
       let hue = bar_hues[bar] + hue_offset
-      let sat = bar_sats[bar]
-      let light = bar_lights[bar]
-      // Vertical hue gradient: a deeper hue at the base, a brighter hue at the
-      // top (±18°), so each column reads as a glowing neon tube instead of a
-      // flat fill. Colour still means frequency — the pair is anchored to the bar.
-      let (br0, bg0, bb0) = hsl_to_rgb(hue - 18.0, sat, light)
-      let (br1, bg1, bb1) = hsl_to_rgb(hue + 18.0, sat, light)
+      let (sat, light) = match scheme {
+        0 => (bar_sats[bar], bar_lights[bar])
+        1 => (0.95, 0.52)
+        _ => (0.75, 0.55)
+      }
+      // Vertical hue gradient. rainbow: a deeper hue at the base, a brighter
+      // hue at the top (±18°) — colour still means frequency. fire/ice: every
+      // column shares one hue ramp from base to crest — colour means loudness.
+      let hue0 = match scheme {
+        0 => hue - 18.0
+        1 => 8.0
+        _ => 250.0
+      }
+      let hue1 = match scheme {
+        0 => hue + 18.0
+        1 => 60.0
+        _ => 195.0
+      }
+      let (br0, bg0, bb0) = hsl_to_rgb(hue0, sat, light)
+      let (br1, bg1, bb1) = hsl_to_rgb(hue1, sat, light)
       let bar_off = bar * nbl
       for level in 0..<nbl {
         let lr = level.to_double() / (nbl - 1).to_double()
@@ -481,6 +500,7 @@ fn precompute_spectro_bg_tables(
   num_bars : Int32,
   num_tables : Int32,
   hue_step : Double,
+  scheme : Int32,
 ) -> Array[Array[String]] {
   let nbl = num_brightness_levels
   let tables = Array::make(num_tables, Array::make(0, ""))
@@ -489,18 +509,25 @@ fn precompute_spectro_bg_tables(
     let table = Array::make(num_bars * nbl, "")
     for bar in 0..<num_bars {
       let hue = bar_hues[bar] + hue_offset
+      let (sat, light) = match scheme {
+        0 => (bar_sats[bar], bar_lights[bar])
+        1 => (0.95, 0.52)
+        _ => (0.75, 0.55)
+      }
       // Same vertical hue gradient as the live bars, so a column keeps a
       // continuous colour from the spectrum down through the history rows.
-      let (br0, bg0, bb0) = hsl_to_rgb(
-        hue - 18.0,
-        bar_sats[bar],
-        bar_lights[bar],
-      )
-      let (br1, bg1, bb1) = hsl_to_rgb(
-        hue + 18.0,
-        bar_sats[bar],
-        bar_lights[bar],
-      )
+      let hue0 = match scheme {
+        0 => hue - 18.0
+        1 => 8.0
+        _ => 250.0
+      }
+      let hue1 = match scheme {
+        0 => hue + 18.0
+        1 => 60.0
+        _ => 195.0
+      }
+      let (br0, bg0, bb0) = hsl_to_rgb(hue0, sat, light)
+      let (br1, bg1, bb1) = hsl_to_rgb(hue1, sat, light)
       let bar_off = bar * nbl
       for level in 0..<nbl {
         let lr = level.to_double() / (nbl - 1).to_double()
@@ -720,6 +747,7 @@ fn create_display_context(
   fft_size : Int32,
   show_piano : Bool,
   show_bands : Bool,
+  scheme : Int32,
 ) -> DisplayContext {
   let bin_map = Array::makei(num_bars, fn(bar) {
     log_freq_bin(bar, num_bars, half_fft)
@@ -752,16 +780,36 @@ fn create_display_context(
     }
   }
   let (bar_hues, bar_sats, bar_lights) = precompute_bar_colors(num_bars)
+  // fire/ice paint hue by height with no per-frame rotation — one table each.
+  let num_color_tables = match scheme {
+    0 => 40
+    _ => 1
+  }
   let color_tables = precompute_color_tables(
-    bar_hues, bar_sats, bar_lights, num_bars, 40, 3.0,
+    bar_hues, bar_sats, bar_lights, num_bars, num_color_tables, 3.0, scheme,
   )
   // Precompute stable frequency-label colors. Unlike the bars these do NOT
   // rotate with the rainbow: a coordinate axis should stay colour-stable so
-  // the labels remain readable while the spectrum animates.
+  // the labels remain readable while the spectrum animates. fire/ice use one
+  // warm / cool tone matching their palettes.
   let label_colors = Array::make(num_bars, "")
-  for bar in 0..<num_bars {
-    let (r, g, b) = hsl_to_rgb(bar_hues[bar], 0.40, 0.62)
-    label_colors[bar] = "\u001b[38;2;\{r};\{g};\{b}m"
+  match scheme {
+    0 =>
+      for bar in 0..<num_bars {
+        let (r, g, b) = hsl_to_rgb(bar_hues[bar], 0.40, 0.62)
+        label_colors[bar] = "\u001b[38;2;\{r};\{g};\{b}m"
+      }
+    _ => {
+      // fire: warm amber axis; ice: cool cyan axis (matches each palette)
+      let (r, g, b) = match scheme {
+        1 => hsl_to_rgb(45.0, 0.75, 0.72)
+        _ => hsl_to_rgb(200.0, 0.65, 0.72)
+      }
+      let tone = "\u001b[38;2;\{r};\{g};\{b}m"
+      for bar in 0..<num_bars {
+        label_colors[bar] = tone
+      }
+    }
   }
   // Row contribution: range [3.0, 17.0] for 32 brightness levels
   // Bottom rows dimmer, top rows brighter — 3D glow effect
@@ -847,7 +895,7 @@ fn create_display_context(
   })
   // Precompute spectrogram waterfall background tables (per-bar hue, rotating)
   let spectro_bg_tables = precompute_spectro_bg_tables(
-    bar_hues, bar_sats, bar_lights, num_bars, 40, 3.0,
+    bar_hues, bar_sats, bar_lights, num_bars, num_color_tables, 3.0, scheme,
   )
   // Precompute band meter colors (green→yellow→red, 14 levels)
   let band_cols = Array::make(band_meter_cells, "")
@@ -880,6 +928,7 @@ fn create_display_context(
     bin_ends,
     is_grid,
     color_tables,
+    num_color_tables,
     color_table_idx: 0,
     row_contrib,
     height_factor,

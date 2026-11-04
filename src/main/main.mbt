@@ -21,6 +21,18 @@ fn is_power_of_two(n : Int32) -> Bool {
 }
 
 ///|
+/// Scheme name → palette id. Unknown names fall back to rainbow (caller
+/// prints a warning for typos).
+fn parse_scheme(arg : String?) -> Int32 {
+  let mut id = 0
+  match arg {
+    Some(s) => if s == "fire" { id = 1 } else if s == "ice" { id = 2 }
+    None => ()
+  }
+  id
+}
+
+///|
 fn parse_fft_size(arg : String?) -> Int32 {
   match arg {
     Some(s) => @string.parse_int(s) catch { _ => 1024 }
@@ -36,9 +48,17 @@ async fn main {
     n if n < 2 => {
       println("🎵 moonFFTmusic — Real-time Spectrum Analyzer")
       println("")
-      println("Usage: moonFFTmusic <wav_file> [fft_size]")
+      println("Usage: moonFFTmusic <wav_file> [fft_size] [scheme]")
       println("  wav_file:  path to WAV file (16-bit PCM)")
       println("  fft_size:  FFT window size, power of 2 (default: 1024)")
+      println("  scheme:    colour palette (default: rainbow)")
+      println("             rainbow — hue anchored to frequency, aurora flow")
+      println(
+        "             fire    — red base → yellow crest, painted by height",
+      )
+      println(
+        "             ice     — violet base → cyan crest, painted by height",
+      )
       println("")
       println("Device:    GPU auto-selected when detected, CPU fallback")
       println("  (CUDA_VISIBLE_DEVICES=-1 forces CPU)")
@@ -62,6 +82,21 @@ async fn main {
       None
     },
   )
+  // Colour scheme (cava-style): rainbow (default), fire or ice
+  let mut scheme_name = "rainbow"
+  let mut scheme_known = true
+  if args.length() >= 4 {
+    scheme_name = args[3]
+    if scheme_name != "rainbow" && scheme_name != "fire" && scheme_name != "ice" {
+      scheme_known = false
+    }
+  }
+  if !scheme_known {
+    println(
+      "Warning: unknown scheme '\{scheme_name}' — falling back to rainbow (options: rainbow, fire, ice)",
+    )
+  }
+  let scheme = parse_scheme(if scheme_known { Some(scheme_name) } else { None })
 
   // --- Validate FFT size ---
   if !is_power_of_two(fft_size) || fft_size < 256 {
@@ -164,6 +199,7 @@ async fn main {
     fft_size,
     show_piano,
     show_bands,
+    scheme,
   )
 
   // --- Initialize beat detector ---
@@ -287,7 +323,7 @@ async fn main {
       last_dom_bar
     }
     // Rainbow hue rotation: swap to precomputed color table (zero alloc)
-    ctx.color_table_idx = frame_count % 40
+    ctx.color_table_idx = frame_count % ctx.num_color_tables
     let display = render_spectrum(
       magnitudes,
       ctx,
